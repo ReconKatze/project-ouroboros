@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
@@ -67,8 +66,9 @@ def build_student(args, device):
     # Step 3: unfreeze sink tokens
     hybrid.sink_tokens.sinks.requires_grad_(True)
 
-    # Cast to float16 for memory efficiency
-    hybrid = hybrid.half().to(device)
+    # Keep student in float32 — GradScaler requires float32 parameters.
+    # autocast handles float16 math during the forward pass.
+    hybrid = hybrid.to(device)
     hybrid.train()
 
     trainable = sum(p.numel() for p in hybrid.parameters() if p.requires_grad)
@@ -82,7 +82,7 @@ def build_teacher(args, device):
     """Load Qwen2.5-3B in float16, eval mode, fully frozen."""
     print(f"Loading teacher {args.teacher} (float16)...")
     teacher = AutoModelForCausalLM.from_pretrained(
-        args.teacher, torch_dtype=torch.float16
+        args.teacher, dtype=torch.float16
     ).to(device)
     teacher.eval()
     for p in teacher.parameters():
@@ -258,7 +258,7 @@ def main():
     optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
 
     # float16 AMP scaler (T4 = Turing, no bfloat16)
-    scaler = GradScaler()
+    scaler = torch.amp.GradScaler("cuda")
 
     # --- Dataset ---
     data_gen = make_token_chunks(tokenizer, args.seq_len)
@@ -294,7 +294,7 @@ def main():
         # Student forward (AMP float16)
         optimizer.zero_grad(set_to_none=True)
 
-        with autocast(dtype=torch.float16):
+        with torch.amp.autocast("cuda", dtype=torch.float16):
             full_logits = student(input_ids)                       # [batch, num_sinks+seq_len, vocab]
             # Remove sink token positions to align with teacher
             student_logits = full_logits[:, student.num_sinks:, :] # [batch, seq_len, vocab]

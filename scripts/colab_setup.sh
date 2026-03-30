@@ -9,24 +9,38 @@
 # Then run Step 2b:
 #   !python scripts/convert_and_test.py --model Qwen/Qwen2.5-0.5B --device cuda
 
-set -e
-
 echo "=== Installing Project Ouroboros dependencies ==="
 
-# Core
+# 1. Core
+echo "[1/5] torch + transformers..."
 pip install -q torch transformers
 
-# Real Mamba kernels (CUDA required)
-pip install -q mamba-ssm --no-build-isolation
-pip install -q causal-conv1d --no-build-isolation
+# 2. Build tools required by mamba-ssm and causal-conv1d
+echo "[2/5] Build tools (packaging, ninja)..."
+pip install -q packaging ninja
 
-# Flash attention for remaining attention layers
-pip install -q flash-attn --no-build-isolation
+# 3. causal-conv1d FIRST — mamba-ssm depends on it
+echo "[3/5] causal-conv1d..."
+pip install causal-conv1d --no-build-isolation
+
+# 4. Real Mamba kernels
+echo "[4/5] mamba-ssm..."
+pip install mamba-ssm --no-build-isolation
+
+# 5. Flash attention (optional — speeds up kept attention layers)
+#    Soft-fail: if this fails don't abort, it's not required for Step 2
+echo "[5/5] flash-attn (optional, soft-fail)..."
+pip install flash-attn --no-build-isolation || echo "  flash-attn failed — skipping (not required for Step 2)"
 
 # Training dependencies (Steps 3-4)
+echo "[+] bitsandbytes + datasets..."
 pip install -q bitsandbytes datasets
 
 echo ""
 echo "=== Setup complete ==="
+echo ""
+echo "Verify mamba-ssm is importable:"
+python -c "from mamba_ssm import Mamba; print('  mamba_ssm OK:', Mamba)"
+echo ""
 echo "Run Step 2b:"
 echo "  python scripts/convert_and_test.py --model Qwen/Qwen2.5-0.5B --device cuda"

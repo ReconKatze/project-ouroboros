@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
-"""Step 1: Convert Pythia-160M to hybrid Mamba/Attention and verify.
+"""Ouroboros conversion + forward pass test.
+
+Supports any architecture with a HybridChimeraModel adapter.
+Steps 1 & 2a use CPU + FallbackMamba.
+Step 2b uses --device cuda with real Mamba kernels on Colab T4.
 
 Usage:
-    python scripts/convert_and_test.py --model EleutherAI/pythia-160m --device cpu
+    # Step 1 (Pythia, CPU):
+    python scripts/convert_and_test.py --model EleutherAI/pythia-160m
+
+    # Step 2a (Qwen, CPU, FallbackMamba):
+    python scripts/convert_and_test.py --model Qwen/Qwen2.5-0.5B
+
+    # Step 2b (Qwen, CUDA, real Mamba — Colab):
+    python scripts/convert_and_test.py --model Qwen/Qwen2.5-0.5B --device cuda
 """
 
 import argparse
 import os
 import sys
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
@@ -21,171 +31,160 @@ from chimera.utils.layer_plan import build_layer_plan
 
 
 def cosine_similarity(a, b):
-    """Compute cosine similarity between two tensors."""
     a_flat = a.reshape(-1).float()
     b_flat = b.reshape(-1).float()
     return F.cosine_similarity(a_flat.unsqueeze(0), b_flat.unsqueeze(0)).item()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Step 1: Pythia-160M Mamba Conversion")
-    parser.add_argument("--model", default="EleutherAI/pythia-160m",
-                        help="HuggingFace model name")
-    parser.add_argument("--device", default="cpu", help="Device (cpu or cuda)")
-    parser.add_argument("--num-sinks", type=int, default=4,
-                        help="Number of sink tokens")
+    parser = argparse.ArgumentParser(description="Ouroboros conversion test")
+    parser.add_argument("--model", default="EleutherAI/pythia-160m")
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--num-sinks", type=int, default=4)
     args = parser.parse_args()
 
     device = torch.device(args.device)
     results = {}
 
-    # --- Load original model ---
+    # --- Load model ---
     print(f"Loading {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     original_model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype=torch.float32
+        args.model, dtype=torch.float32
     ).to(device)
     original_model.eval()
 
     config = original_model.config
+    model_type = config.model_type
     num_layers = config.num_hidden_layers
     hidden_size = config.hidden_size
     num_heads = config.num_attention_heads
-    head_size = hidden_size // num_heads
-    use_parallel = getattr(config, "use_parallel_residual", True)
+    num_kv_heads = getattr(config, "num_key_value_heads", num_heads)
+    head_dim = hidden_size // num_heads
 
-    print(f"Model config: {num_layers} layers, hidden_size={hidden_size}, "
-          f"num_heads={num_heads}, head_size={head_size}")
-    print(f"Parallel residual: {use_parallel}")
+    print(f"Architecture:  {model_type}")
+    print(f"Layers:        {num_layers}")
+    print(f"Hidden size:   {hidden_size}")
+    print(f"Heads:         {num_heads}Q / {num_kv_heads}KV  (head_dim={head_dim})")
+    if num_kv_heads < num_heads:
+        print(f"GQA ratio:     {num_heads // num_kv_heads}x tiling required for K/V")
 
-    # --- Get original model output for comparison ---
+    # --- Original model forward for comparison ---
     test_text = "def add(a, b): return a + b"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     inputs = tokenizer(test_text, return_tensors="pt").to(device)
 
     with torch.no_grad():
-        original_output = original_model(**inputs)
-        original_logits = original_output.logits
-
-    print(f"Original logits shape: {original_logits.shape}")
-    print(f"Original logits range: [{original_logits.min():.2f}, {original_logits.max():.2f}]")
+        original_logits = original_model(**inputs).logits
+    print(f"\nOriginal logits shape: {original_logits.shape}")
 
     # --- Build layer plan ---
-    attn_keep = {0, 3, 7, 11}
-    layer_plan = build_layer_plan(num_layers, attn_keep)
+    layer_plan = build_layer_plan(num_layers, model_type=model_type)
     num_mamba = sum(1 for p in layer_plan if p["kind"] == "mamba")
-    num_attn = sum(1 for p in layer_plan if p["kind"] == "attn")
+    num_attn  = sum(1 for p in layer_plan if p["kind"] == "attn")
     print(f"\nLayer plan: {num_mamba} Mamba + {num_attn} Attention")
 
-    # --- Convert to hybrid ---
+    # --- Convert ---
     print("Converting layers...")
-    hybrid_model = HybridChimeraModel(
-        original_model, layer_plan, num_sinks=args.num_sinks
+    hybrid = HybridChimeraModel(
+        original_model, layer_plan,
+        num_sinks=args.num_sinks,
+        device=args.device,
     ).to(device)
-    hybrid_model.eval()
+    hybrid.eval()
 
-    for line in hybrid_model.conversion_log:
+    for line in hybrid.conversion_log:
         print(line)
-    print("Conversion complete.")
 
-    # --- Parameter counts ---
-    total_params, mamba_params = hybrid_model.count_parameters()
-    print(f"\nTotal parameters: {total_params:,}")
-    print(f"Mamba + sink parameters: {mamba_params:,}")
+    total_params, mamba_params = hybrid.count_parameters()
+    print(f"\nTotal parameters:         {total_params:,}")
+    print(f"Mamba + sink parameters:  {mamba_params:,}")
     results["total_params"] = total_params
     results["mamba_params"] = mamba_params
 
-    # --- Forward pass test ---
+    # --- Forward pass ---
     print("\n--- Forward Pass Test ---")
     try:
         with torch.no_grad():
-            hybrid_logits = hybrid_model(inputs["input_ids"],
-                                         attention_mask=inputs.get("attention_mask"))
-        print(f"Hybrid logits shape: {hybrid_logits.shape}")
-        expected_seq_len = inputs["input_ids"].shape[1] + args.num_sinks
-        assert hybrid_logits.shape == (1, expected_seq_len, config.vocab_size), \
-            f"Shape mismatch: expected (1, {expected_seq_len}, {config.vocab_size})"
+            hybrid_logits = hybrid(
+                inputs["input_ids"],
+                attention_mask=inputs.get("attention_mask"),
+            )
+        seq_len = inputs["input_ids"].shape[1]
+        expected_shape = (1, seq_len + args.num_sinks, config.vocab_size)
+        assert hybrid_logits.shape == expected_shape, \
+            f"Expected {expected_shape}, got {hybrid_logits.shape}"
         results["shape_check"] = "PASS"
-        print(f"Shape check: PASS")
+        print(f"Shape:      {hybrid_logits.shape}  OK")
     except Exception as e:
         results["shape_check"] = f"FAIL: {e}"
-        print(f"Shape check: FAIL - {e}")
+        print(f"Shape check FAILED: {e}")
+        _print_summary(results)
         return results
 
     # --- NaN check ---
     if torch.isfinite(hybrid_logits).all():
         results["nan_check"] = "PASS"
-        print(f"NaN/Inf check: PASS")
+        print("NaN/Inf:    PASS")
     else:
-        nan_count = (~torch.isfinite(hybrid_logits)).sum().item()
-        results["nan_check"] = f"FAIL: {nan_count} non-finite values"
-        print(f"NaN/Inf check: FAIL ({nan_count} non-finite values)")
+        n = (~torch.isfinite(hybrid_logits)).sum().item()
+        results["nan_check"] = f"FAIL ({n} non-finite)"
+        print(f"NaN/Inf:    FAIL — {n} non-finite values")
+        _print_summary(results)
         return results
 
-    print(f"Hybrid logits range: [{hybrid_logits.min():.2f}, {hybrid_logits.max():.2f}]")
-
     # --- Cosine similarity ---
-    # Compare only the overlapping sequence positions (skip sink tokens)
     hybrid_comparable = hybrid_logits[:, args.num_sinks:, :]
     cos_sim = cosine_similarity(original_logits, hybrid_comparable)
-    results["cosine_similarity"] = cos_sim
-    print(f"\nCosine similarity with original: {cos_sim:.4f}")
-
+    results["cosine_similarity"] = f"{cos_sim:.4f}"
+    print(f"Cosine sim: {cos_sim:.4f}", end="  ")
     if cos_sim >= 0.95:
-        print("  -> High similarity (expected with parallel residual + 4 kept attention layers)")
-        print("     MLP paths are untouched and dominate in GPT-NeoX parallel residual.")
-    elif cos_sim >= 0.5:
-        print("  -> Moderate similarity. Conversion changed logit distribution noticeably.")
-    elif cos_sim > 0.0:
-        print("  -> Low similarity. Large divergence from original.")
+        print("(high — expected with kept attn layers + untouched MLPs)")
+    elif cos_sim >= 0.4:
+        print("(moderate)")
     else:
-        print("  -> Very low/negative. Weights may not have transferred correctly.")
+        print("(low — large divergence)")
 
-    # Check top-1 token divergence (more sensitive than cosine sim)
+    # --- Top-1 divergence ---
     orig_top1 = original_logits.argmax(dim=-1)
-    hybrid_top1 = hybrid_comparable.argmax(dim=-1)
-    top1_match = (orig_top1 == hybrid_top1).float().mean().item()
-    results["top1_agreement"] = top1_match
-    print(f"Top-1 token agreement: {top1_match:.2%}")
-    if top1_match < 1.0:
-        print("  -> Tokens diverge - conversion IS changing predictions (good).")
+    hyb_top1  = hybrid_comparable.argmax(dim=-1)
+    top1_match = (orig_top1 == hyb_top1).float().mean().item()
+    results["top1_agreement"] = f"{top1_match:.1%}"
+    print(f"Top-1 agreement: {top1_match:.1%}", end="  ")
+    print("(conversion changed predictions)" if top1_match < 1.0 else "(no change — check conversion)")
 
-    # --- Generation test ---
+    # --- Generation ---
     print("\n--- Generation Test ---")
     prompt = "def hello():"
     gen_inputs = tokenizer(prompt, return_tensors="pt").to(device)
-
     try:
-        generated_ids = hybrid_model.generate(
-            gen_inputs["input_ids"], max_new_tokens=50
-        )
-        generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        gen_ids = hybrid.generate(gen_inputs["input_ids"], max_new_tokens=40)
+        gen_text = tokenizer.decode(gen_ids[0], skip_special_tokens=True)
         results["generation"] = "PASS"
-        print(f"Prompt: {prompt}")
-        print(f"Generated: {generated_text[:200]}")
-        print("  -> Generation completed (gibberish is expected at this stage)")
+        print(f"Prompt:    {prompt}")
+        print(f"Generated: {gen_text[:200]}")
     except Exception as e:
         results["generation"] = f"FAIL: {e}"
-        print(f"Generation: FAIL - {e}")
+        print(f"Generation FAILED: {e}")
 
-    # --- Summary ---
-    print("\n" + "=" * 60)
-    print("STEP 1 SUMMARY")
-    print("=" * 60)
-    all_pass = True
-    for key, value in results.items():
-        status = value if isinstance(value, str) else str(value)
-        is_pass = "PASS" in str(status) if isinstance(status, str) else True
-        marker = "OK" if is_pass else "!!"
-        print(f"  [{marker}] {key}: {status}")
-        if isinstance(status, str) and "FAIL" in status:
-            all_pass = False
-
-    if all_pass:
-        print("\nStep 1: PASS - Scaffold conversion works!")
-    else:
-        print("\nStep 1: ISSUES DETECTED - See above for details.")
-
+    _print_summary(results)
     return results
+
+
+def _print_summary(results):
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    for k, v in results.items():
+        ok = "FAIL" not in str(v)
+        print(f"  [{'OK' if ok else '!!'}] {k}: {v}")
+    all_pass = all("FAIL" not in str(v) for v in results.values())
+    print()
+    if all_pass:
+        print("PASS — Conversion scaffold works for this model.")
+    else:
+        print("ISSUES DETECTED — see above.")
 
 
 if __name__ == "__main__":

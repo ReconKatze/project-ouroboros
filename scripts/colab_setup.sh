@@ -11,9 +11,11 @@
 
 echo "=== Installing Project Ouroboros dependencies ==="
 
-# 1. Core
-echo "[1/5] torch + transformers..."
-pip install -q torch transformers
+# 1. transformers only — Colab already has PyTorch with CUDA pre-installed.
+#    DO NOT pip install torch here: PyPI ships CPU-only torch and clobbers Colab's
+#    CUDA torch, which causes causal-conv1d/mamba-ssm metadata builds to fail.
+echo "[1/5] transformers (torch already present in Colab)..."
+pip install -q transformers
 
 # 2. Build tools required by mamba-ssm and causal-conv1d
 echo "[2/5] Build tools (packaging, ninja)..."

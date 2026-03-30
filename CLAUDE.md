@@ -34,7 +34,7 @@ scripts/
 |------|-------------|----------|--------|
 | 1 | Pythia-160M Mamba conversion | CPU | **COMPLETE** |
 | 2 | Qwen2.5-0.5B conversion (real Mamba kernels) | Colab T4 | **COMPLETE** |
-| 3 | Distillation from 3B teacher | Colab T4 | Not started |
+| 3 | Distillation from 3B teacher | Colab T4 | **COMPLETE** |
 | 4 | d_state gradient experiment (4 variants) | Colab T4 | Not started |
 | 5 | GGUF export | CPU | Not started |
 

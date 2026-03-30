@@ -37,7 +37,7 @@ def build_student(args, device):
 
     # Load in float32 — conversion weight extraction requires float32
     base = AutoModelForCausalLM.from_pretrained(
-        args.student, torch_dtype=torch.float32
+        args.student, dtype=torch.float32
     ).to(device)
 
     layer_plan = build_layer_plan(

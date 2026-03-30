@@ -19,9 +19,11 @@ Variants:
     C — three-tier:     d_state 16 (×6), 64 (×6), 128 (×6)
     D — exponential gradient: [16,16,24,24,...,256,256] + β depth gate
 
-Usage (Colab T4):
+Usage (Colab A100):
     python scripts/run_experiment.py --steps 5000
     python scripts/run_experiment.py --steps 5000 --variants AD
+
+AMP: bfloat16 on A100/H100 (no GradScaler needed), float16 on T4 (GradScaler).
 """
 
 import argparse
@@ -40,6 +42,17 @@ from datasets import load_dataset
 from chimera.models.hybrid_model import HybridChimeraModel
 from chimera.models.beta_mamba import BetaGatedMamba
 from chimera.utils.layer_plan import build_layer_plan
+
+
+# ---------------------------------------------------------------------------
+# AMP dtype detection
+# ---------------------------------------------------------------------------
+
+def get_amp_dtype():
+    """bfloat16 on A100/H100 (native HW, no scaler needed), float16 on T4/V100."""
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +137,7 @@ def distill_loss(student_logits, teacher_logits, T=2.0):
 # Validation
 # ---------------------------------------------------------------------------
 
-def evaluate(student, teacher, val_chunks, device, temperature):
+def evaluate(student, teacher, val_chunks, device, temperature, amp_dtype):
     """Compute mean distillation loss on the held-out val set (no grad)."""
     student.eval()
     total = 0.0
@@ -132,7 +145,7 @@ def evaluate(student, teacher, val_chunks, device, temperature):
         for chunk in val_chunks:
             input_ids = chunk.unsqueeze(0).to(device)
             teacher_logits = teacher(input_ids=input_ids).logits
-            with torch.amp.autocast("cuda", dtype=torch.float16):
+            with torch.amp.autocast("cuda", dtype=amp_dtype):
                 full_logits    = student(input_ids)
                 student_logits = full_logits[:, student.num_sinks:, :]
             loss = distill_loss(student_logits.float(), teacher_logits.float(), temperature)
@@ -192,7 +205,7 @@ def build_variant_student(args, cfg, device):
 # Training loop for one variant
 # ---------------------------------------------------------------------------
 
-def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
+def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, amp_dtype, effective_lr):
     """Train one variant. Returns dict of val losses keyed by step."""
     print(f"\n{'='*60}")
     print(f"Variant {name}: {cfg['label']}")
@@ -200,8 +213,9 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
 
     student          = build_variant_student(args, cfg, device)
     trainable_params = [p for p in student.parameters() if p.requires_grad]
-    optimizer        = AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
-    scaler           = torch.amp.GradScaler("cuda")
+    optimizer        = AdamW(trainable_params, lr=effective_lr, weight_decay=0.01)
+    use_scaler       = (amp_dtype == torch.float16)
+    scaler           = torch.amp.GradScaler("cuda") if use_scaler else None
 
     # Linear LR warmup over first warmup_steps optimizer steps
     warmup_steps = min(200, args.steps // 10)
@@ -218,20 +232,24 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
 
     # Initial validation before any training
     print(f"  [{name}] Step 0 — initial val loss...")
-    val_loss = evaluate(student, teacher, val_chunks, device, args.temperature)
+    val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
     val_log[0] = val_loss
     print(f"  [{name}] Step    0/{args.steps} | val={val_loss:.4f}  (pre-training)")
 
     for step in range(1, args.steps + 1):
-        input_ids = train_chunks[chunk_idx % len(train_chunks)].unsqueeze(0).to(device)
-        chunk_idx += 1
+        batch_chunks = [
+            train_chunks[(chunk_idx + i) % len(train_chunks)]
+            for i in range(args.batch_size)
+        ]
+        input_ids = torch.stack(batch_chunks).to(device)   # [batch_size, seq_len]
+        chunk_idx += args.batch_size
 
         # Teacher forward
         with torch.no_grad():
             teacher_logits = teacher(input_ids=input_ids).logits
 
         # Student forward
-        with torch.amp.autocast("cuda", dtype=torch.float16):
+        with torch.amp.autocast("cuda", dtype=amp_dtype):
             full_logits    = student(input_ids)
             student_logits = full_logits[:, student.num_sinks:, :]
 
@@ -245,16 +263,22 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
             print(f"  [{name}] Step {step}: NaN/Inf loss — stopping variant.")
             break
 
-        # Scale by grad_accum so effective LR matches single-step case
-        scaled = scaler.scale(loss / args.grad_accum)
-        scaled.backward()
+        # Accumulate gradients (scale by grad_accum so effective LR is consistent)
+        if use_scaler:
+            scaler.scale(loss / args.grad_accum).backward()
+        else:
+            (loss / args.grad_accum).backward()
         accum_steps += 1
 
         if accum_steps == args.grad_accum:
-            scaler.unscale_(optimizer)
+            if use_scaler:
+                scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
+            if use_scaler:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             scheduler.step()
             accum_steps = 0
@@ -264,7 +288,7 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
 
         # Validation eval
         if step % args.eval_every == 0:
-            val_loss = evaluate(student, teacher, val_chunks, device, args.temperature)
+            val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
             val_log[step] = val_loss
             lr_now = scheduler.get_last_lr()[0]
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
@@ -277,7 +301,7 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
 
     # Final validation if not already done at last step
     if args.steps not in val_log:
-        val_loss = evaluate(student, teacher, val_chunks, device, args.temperature)
+        val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
         val_log[args.steps] = val_loss
         print(f"  [{name}] Step {args.steps:5d}/{args.steps} | val={val_loss:.4f}  (final)")
 
@@ -294,7 +318,9 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
                 print(f"    layer {plan['layer_idx']:2d} depth={bg.depth:.2f}: "
                       f"β={b:+.3f}  γ={g:+.3f}  →  α={alpha:.3f}")
 
-    del student, optimizer, scaler, scheduler
+    del student, optimizer, scheduler
+    if scaler is not None:
+        del scaler
     torch.cuda.empty_cache()
 
     return val_log
@@ -306,7 +332,7 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Step 4: d_state gradient experiment")
-    p.add_argument("--teacher",     default="Qwen/Qwen2.5-1.5B")
+    p.add_argument("--teacher",     default="Qwen/Qwen2.5-3B")
     p.add_argument("--student",     default="Qwen/Qwen2.5-0.5B")
     p.add_argument("--steps",       type=int,   default=5000)
     p.add_argument("--lr",          type=float, default=5e-5)
@@ -320,6 +346,8 @@ def parse_args():
                    help="Log training EMA loss every N steps")
     p.add_argument("--n-val",       type=int,   default=100,
                    help="Number of held-out val chunks")
+    p.add_argument("--batch-size",  type=int,   default=4,
+                   help="Sequences per gradient step. Default 4 suits A100 80GB comfortably.")
     p.add_argument("--variants",    default="ABCD",
                    help="Which variants to run, e.g. 'ABCD' or 'AD'")
     return p.parse_args()
@@ -338,14 +366,23 @@ def main():
         print(f"No valid variants in '{args.variants}'. Choose from A B C D.")
         return
 
-    n_train = args.steps + 500   # a few extra so we never repeat
+    # --- AMP dtype ---
+    amp_dtype  = get_amp_dtype()
+    dtype_name = "bfloat16" if amp_dtype == torch.bfloat16 else "float16"
+    print(f"AMP dtype: {dtype_name}  |  GradScaler: {'no (bfloat16)' if amp_dtype == torch.bfloat16 else 'yes'}")
+
+    n_train = args.steps * args.batch_size + 500   # enough chunks, never repeat within a variant
+
+    # Linear LR scaling: base --lr was tuned at batch_size=1
+    effective_lr = args.lr * args.batch_size
+    print(f"LR: {args.lr} × batch_size {args.batch_size} → effective LR {effective_lr:.2e}")
     print(f"\nVariants: {list(selected.keys())}  |  Steps each: {args.steps}  |  "
           f"Grad accum: {args.grad_accum}  |  Val every: {args.eval_every}")
 
     # Load teacher once
-    print(f"\nLoading teacher: {args.teacher} (float16)...")
+    print(f"\nLoading teacher: {args.teacher} ({dtype_name})...")
     teacher = AutoModelForCausalLM.from_pretrained(
-        args.teacher, dtype=torch.float16
+        args.teacher, dtype=amp_dtype
     ).to(device)
     teacher.eval()
     for p in teacher.parameters():
@@ -363,7 +400,7 @@ def main():
     all_val_logs = {}
     for name, cfg in selected.items():
         all_val_logs[name] = train_variant(
-            name, cfg, args, teacher, train_chunks, val_chunks, device
+            name, cfg, args, teacher, train_chunks, val_chunks, device, amp_dtype, effective_lr
         )
 
     # Comparison table (val loss)

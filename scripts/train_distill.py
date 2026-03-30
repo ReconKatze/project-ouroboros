@@ -6,9 +6,11 @@ All attention layers, MLPs, norms, embeddings, and lm_head are frozen.
 
 Primary proof goal: gradient flow through mamba-ssm CUDA kernels.
 
-Usage (Colab T4):
+Usage (Colab A100/T4):
     python scripts/train_distill.py
     python scripts/train_distill.py --teacher Qwen/Qwen2.5-3B --steps 500
+
+AMP: bfloat16 on A100/H100 (no GradScaler needed), float16 on T4 (GradScaler).
 """
 
 import argparse
@@ -25,6 +27,17 @@ from datasets import load_dataset
 
 from chimera.models.hybrid_model import HybridChimeraModel
 from chimera.utils.layer_plan import build_layer_plan
+
+
+# ---------------------------------------------------------------------------
+# AMP dtype detection
+# ---------------------------------------------------------------------------
+
+def get_amp_dtype():
+    """bfloat16 on A100/H100 (native HW, no scaler needed), float16 on T4/V100."""
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
 
 
 # ---------------------------------------------------------------------------
@@ -78,11 +91,12 @@ def build_student(args, device):
     return hybrid
 
 
-def build_teacher(args, device):
-    """Load Qwen2.5-3B in float16, eval mode, fully frozen."""
-    print(f"Loading teacher {args.teacher} (float16)...")
+def build_teacher(args, device, amp_dtype):
+    """Load teacher in amp_dtype, eval mode, fully frozen."""
+    dtype_name = "bfloat16" if amp_dtype == torch.bfloat16 else "float16"
+    print(f"Loading teacher {args.teacher} ({dtype_name})...")
     teacher = AutoModelForCausalLM.from_pretrained(
-        args.teacher, dtype=torch.float16
+        args.teacher, dtype=amp_dtype
     ).to(device)
     teacher.eval()
     for p in teacher.parameters():
@@ -241,8 +255,14 @@ def main():
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
+    # --- AMP dtype ---
+    amp_dtype  = get_amp_dtype()
+    use_scaler = (amp_dtype == torch.float16)
+    dtype_name = "bfloat16" if amp_dtype == torch.bfloat16 else "float16"
+    print(f"AMP dtype: {dtype_name}  |  GradScaler: {'yes' if use_scaler else 'no (bfloat16 — not needed)'}")
+
     # --- Build models ---
-    teacher = build_teacher(args, device)
+    teacher = build_teacher(args, device, amp_dtype)
     student = build_student(args, device)
 
     # Tokenizer (Qwen2.5-0.5B and 3B share the same tokenizer)
@@ -257,8 +277,7 @@ def main():
     trainable_params = [p for p in student.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
 
-    # float16 AMP scaler (T4 = Turing, no bfloat16)
-    scaler = torch.amp.GradScaler("cuda")
+    scaler = torch.amp.GradScaler("cuda") if use_scaler else None
 
     # --- Dataset ---
     data_gen = make_token_chunks(tokenizer, args.seq_len)
@@ -294,12 +313,12 @@ def main():
         # Student forward (AMP float16)
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.amp.autocast("cuda", dtype=torch.float16):
+        with torch.amp.autocast("cuda", dtype=amp_dtype):
             full_logits = student(input_ids)                       # [batch, num_sinks+seq_len, vocab]
             # Remove sink token positions to align with teacher
             student_logits = full_logits[:, student.num_sinks:, :] # [batch, seq_len, vocab]
 
-        # KL loss in float32 (softmax over 151,936 tokens underflows in float16)
+        # KL loss in float32 (softmax over 151,936 tokens underflows in float16/bfloat16)
         loss = distill_loss(
             student_logits.float(),
             teacher_logits.float(),
@@ -310,10 +329,11 @@ def main():
             print(f"Step {step}: NaN/Inf loss — stopping. Check LR or model state.")
             break
 
-        scaler.scale(loss).backward()
-
-        # Unscale BEFORE gradient check and clip (idempotent per step)
-        scaler.unscale_(optimizer)
+        if use_scaler:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+        else:
+            loss.backward()
 
         # Gradient flow verification on step 1
         if step == 1 and not grad_verified:
@@ -321,8 +341,12 @@ def main():
             print()
 
         torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
+
+        if use_scaler:
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
 
         loss_val = loss.item()
         if step == 1:

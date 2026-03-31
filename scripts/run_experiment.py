@@ -77,6 +77,15 @@ def make_d_states(spec: dict, n_mamba: int) -> list:
             int(round(d_min * (d_max / d_min) ** (i / max(n_mamba - 1, 1))))
             for i in range(n_mamba)
         ]
+    elif t == "bell":
+        # Reverse bell (U-shape): high at edges, low in middle.
+        # Uses a cosine: d_max at i=0 and i=n-1, d_min at i=(n-1)/2.
+        d_min, d_max = spec["d_min"], spec["d_max"]
+        return [
+            int(round(d_max - (d_max - d_min) *
+                      (1 - math.cos(2 * math.pi * i / max(n_mamba - 1, 1))) / 2))
+            for i in range(n_mamba)
+        ]
     elif t == "three_tier":
         tier = n_mamba // 3
         return [16] * tier + [64] * tier + [128] * (n_mamba - 2 * tier)
@@ -109,6 +118,11 @@ VARIANTS = {
         "d_state_spec": {"type": "exponential", "d_min": 16, "d_max": 256},
         "gate_mode":    "shared_beta",
         "label":        "Exp gradient + shared-β depth gate",
+    },
+    "D_bell": {
+        "d_state_spec": {"type": "bell", "d_min": 16, "d_max": 256},
+        "gate_mode":    "constant",
+        "label":        "Reverse bell (d=256→16→256) + constant gate",
     },
 }
 

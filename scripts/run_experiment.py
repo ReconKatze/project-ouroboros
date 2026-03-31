@@ -42,7 +42,7 @@ from datasets import load_dataset
 
 from chimera.models.hybrid_model import HybridChimeraModel
 from chimera.models.beta_mamba import BetaGatedMamba
-from chimera.utils.layer_plan import build_layer_plan
+from chimera.utils.layer_plan import build_layer_plan, ATTN_KEEP_DEFAULTS
 
 
 # ---------------------------------------------------------------------------
@@ -60,33 +60,55 @@ def get_amp_dtype():
 # Variant definitions
 # ---------------------------------------------------------------------------
 
+def make_d_states(spec: dict, n_mamba: int) -> list:
+    """Generate a d_state list for n_mamba layers from a schedule spec.
+
+    Specs:
+        {"type": "uniform",     "d": 64}
+        {"type": "exponential", "d_min": 16, "d_max": 256}
+        {"type": "three_tier"}   -- uses d=16/64/128 split evenly across thirds
+    """
+    t = spec["type"]
+    if t == "uniform":
+        return [spec["d"]] * n_mamba
+    elif t == "exponential":
+        d_min, d_max = spec["d_min"], spec["d_max"]
+        return [
+            int(round(d_min * (d_max / d_min) ** (i / max(n_mamba - 1, 1))))
+            for i in range(n_mamba)
+        ]
+    elif t == "three_tier":
+        tier = n_mamba // 3
+        return [16] * tier + [64] * tier + [128] * (n_mamba - 2 * tier)
+    else:
+        raise ValueError(f"Unknown d_state_spec type: {t!r}")
+
+
 VARIANTS = {
     "A": {
-        "d_states":  [16] * 18,
-        "gate_mode": None,
-        "label":     "Uniform small (d=16)",
+        "d_state_spec": {"type": "uniform", "d": 16},
+        "gate_mode":    None,
+        "label":        "Uniform small (d=16)",
     },
     "B": {
-        "d_states":  [64] * 18,
-        "gate_mode": None,
-        "label":     "Uniform large (d=64)",
+        "d_state_spec": {"type": "uniform", "d": 64},
+        "gate_mode":    None,
+        "label":        "Uniform large (d=64)",
     },
     "C": {
-        "d_states":  [16]*6 + [64]*6 + [128]*6,
-        "gate_mode": None,
-        "label":     "Three-tier (d=16/64/128)",
+        "d_state_spec": {"type": "three_tier"},
+        "gate_mode":    None,
+        "label":        "Three-tier (d=16/64/128)",
     },
     "D_constant": {
-        "d_states":  [16, 16, 24, 24, 32, 32, 48, 48,
-                      64, 64, 96, 96, 128, 128, 192, 192, 256, 256],
-        "gate_mode": "constant",
-        "label":     "Exp gradient + constant gate (γ only)",
+        "d_state_spec": {"type": "exponential", "d_min": 16, "d_max": 256},
+        "gate_mode":    "constant",
+        "label":        "Exp gradient + constant gate (γ only)",
     },
     "D_proper": {
-        "d_states":  [16, 16, 24, 24, 32, 32, 48, 48,
-                      64, 64, 96, 96, 128, 128, 192, 192, 256, 256],
-        "gate_mode": "shared_beta",
-        "label":     "Exp gradient + shared-β depth gate",
+        "d_state_spec": {"type": "exponential", "d_min": 16, "d_max": 256},
+        "gate_mode":    "shared_beta",
+        "label":        "Exp gradient + shared-β depth gate",
     },
 }
 
@@ -173,10 +195,27 @@ def build_variant_student(args, cfg, device):
         args.student, dtype=torch.float32
     ).to(device)
 
+    # Resolve attention layer indices — explicit override or model-type default
+    if args.attn_indices is not None:
+        attn_keep = {int(x) for x in args.attn_indices.split(",")}
+    else:
+        attn_keep = None  # build_layer_plan uses model-type preset
+
+    effective_attn = (
+        attn_keep if attn_keep is not None
+        else ATTN_KEEP_DEFAULTS.get(base.config.model_type, {0, 3, 7, 11})
+    )
+    n_mamba  = base.config.num_hidden_layers - len(effective_attn)
+    d_states = make_d_states(cfg["d_state_spec"], n_mamba)
+    print(f"  Attn layers: {sorted(effective_attn)}  "
+          f"({len(effective_attn)} attn, {n_mamba} Mamba) | "
+          f"d_state: {d_states[0]}→{d_states[-1]}")
+
     layer_plan = build_layer_plan(
         base.config.num_hidden_layers,
+        attn_keep_indices=attn_keep,
         model_type=base.config.model_type,
-        d_state=cfg["d_states"],
+        d_state=d_states,
     )
 
     hybrid = HybridChimeraModel(base, layer_plan, num_sinks=4, device=str(device))
@@ -373,8 +412,11 @@ def parse_args():
                    help="Number of held-out val chunks")
     p.add_argument("--batch-size",  type=int,   default=4,
                    help="Sequences per gradient step. Default 4 suits A100 80GB comfortably.")
-    p.add_argument("--variants",    default="D_constant,D_proper",
-                   help="Comma-separated variants to run, e.g. 'D_constant,D_proper' or 'A,B,C,D_constant,D_proper'")
+    p.add_argument("--variants",     default="D_constant,D_proper",
+                   help="Comma-separated variants to run, e.g. 'B,D_constant' or 'A,B,C,D_constant,D_proper'")
+    p.add_argument("--attn-indices", default=None,
+                   help="Comma-separated attention layer indices, e.g. '0,11,23' for 3-attention "
+                        "variant. Default: model-type preset ({0,4,8,12,16,23} for Qwen2.5-0.5B).")
     return p.parse_args()
 
 
@@ -466,6 +508,22 @@ def main():
               f"{r['val_mid']:>8.2f} {r['val_final']:>8.2f} {vs_a:>8}")
 
     print("=" * 72)
+
+    # Go/no-go: B vs D_constant answers whether exponential d_state beats uniform
+    if "D_constant" in results and "B" in results:
+        b_val  = results["B"]["val_final"]
+        dc_val = results["D_constant"]["val_final"]
+        if math.isfinite(b_val) and math.isfinite(dc_val):
+            improvement = (b_val - dc_val) / b_val * 100
+            print(f"\nD_constant vs B: {improvement:+.2f}%")
+            if improvement >= 10.0:
+                print("GO — Exponential d_state clearly outperforms uniform. Use for 9B Chimera.")
+            elif improvement > 2.0:
+                print("WEAK SIGNAL — D_constant better but under 10% threshold.")
+            elif improvement > 0:
+                print("MARGINAL — Within noise floor. d_state schedule has no clear effect.")
+            else:
+                print("NULL RESULT — d_state schedule has no effect at this configuration.")
 
     # Go/no-go: D_proper vs D_constant answers whether depth-aware gating adds value
     if "D_proper" in results and "D_constant" in results:

@@ -124,6 +124,11 @@ VARIANTS = {
         "gate_mode":    "constant",
         "label":        "Reverse bell (d=256→16→256) + constant gate",
     },
+    "D_exp_inv": {
+        "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 16},
+        "gate_mode":    "constant",
+        "label":        "Inv. exponential (d=256→16) + constant gate",
+    },
 }
 
 

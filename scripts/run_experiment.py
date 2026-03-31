@@ -14,14 +14,15 @@ Key improvements over v1:
   - Comparison table driven by val loss, not noisy per-step training loss
 
 Variants:
-    A — uniform small:  d_state=16  for all 18 Mamba layers
-    B — uniform large:  d_state=64  for all 18 Mamba layers
-    C — three-tier:     d_state 16 (×6), 64 (×6), 128 (×6)
-    D — exponential gradient: [16,16,24,24,...,256,256] + β depth gate
+    A          — uniform small:   d_state=16  for all 18 Mamba layers
+    B          — uniform large:   d_state=64  for all 18 Mamba layers
+    C          — three-tier:      d_state 16 (×6), 64 (×6), 128 (×6)
+    D_constant — exponential [16→256] + per-layer constant gate sigmoid(γ_i)
+    D_proper   — exponential [16→256] + shared-β depth gate sigmoid(β·depth + γ_i)
 
 Usage (Colab A100):
-    python scripts/run_experiment.py --steps 5000
-    python scripts/run_experiment.py --steps 5000 --variants AD
+    python scripts/run_experiment.py --steps 10000 --batch-size 8
+    python scripts/run_experiment.py --steps 10000 --batch-size 8 --variants D_constant,D_proper
 
 AMP: bfloat16 on A100/H100 (no GradScaler needed), float16 on T4 (GradScaler).
 """
@@ -61,25 +62,31 @@ def get_amp_dtype():
 
 VARIANTS = {
     "A": {
-        "d_states": [16] * 18,
-        "use_beta": False,
-        "label":    "Uniform small (d=16)",
+        "d_states":  [16] * 18,
+        "gate_mode": None,
+        "label":     "Uniform small (d=16)",
     },
     "B": {
-        "d_states": [64] * 18,
-        "use_beta": False,
-        "label":    "Uniform large (d=64)",
+        "d_states":  [64] * 18,
+        "gate_mode": None,
+        "label":     "Uniform large (d=64)",
     },
     "C": {
-        "d_states": [16]*6 + [64]*6 + [128]*6,
-        "use_beta": False,
-        "label":    "Three-tier (d=16/64/128)",
+        "d_states":  [16]*6 + [64]*6 + [128]*6,
+        "gate_mode": None,
+        "label":     "Three-tier (d=16/64/128)",
     },
-    "D": {
-        "d_states": [16, 16, 24, 24, 32, 32, 48, 48,
-                     64, 64, 96, 96, 128, 128, 192, 192, 256, 256],
-        "use_beta": True,
-        "label":    "Exponential gradient + β gate",
+    "D_constant": {
+        "d_states":  [16, 16, 24, 24, 32, 32, 48, 48,
+                      64, 64, 96, 96, 128, 128, 192, 192, 256, 256],
+        "gate_mode": "constant",
+        "label":     "Exp gradient + constant gate (γ only)",
+    },
+    "D_proper": {
+        "d_states":  [16, 16, 24, 24, 32, 32, 48, 48,
+                      64, 64, 96, 96, 128, 128, 192, 192, 256, 256],
+        "gate_mode": "shared_beta",
+        "label":     "Exp gradient + shared-β depth gate",
     },
 }
 
@@ -160,6 +167,8 @@ def evaluate(student, teacher, val_chunks, device, temperature, amp_dtype):
 
 def build_variant_student(args, cfg, device):
     """Build HybridChimeraModel for one variant with the correct d_state schedule."""
+    import torch.nn as nn
+
     base = AutoModelForCausalLM.from_pretrained(
         args.student, dtype=torch.float32
     ).to(device)
@@ -172,15 +181,21 @@ def build_variant_student(args, cfg, device):
 
     hybrid = HybridChimeraModel(base, layer_plan, num_sinks=4, device=str(device))
 
-    # Variant D: wrap Mamba blocks with BetaGatedMamba BEFORE freeze
-    if cfg["use_beta"]:
+    # Gate variants: wrap Mamba blocks with BetaGatedMamba BEFORE freeze
+    gate_mode = cfg.get("gate_mode")
+    if gate_mode in ("constant", "shared_beta"):
         total_mamba = sum(1 for p in hybrid.layer_plan if p["kind"] == "mamba")
+        shared_beta = nn.Parameter(torch.zeros(1)) if gate_mode == "shared_beta" else None
         mamba_idx = 0
         for plan in hybrid.layer_plan:
             if plan["kind"] == "mamba":
                 wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-                wrapper.mamba = BetaGatedMamba(wrapper.mamba, mamba_idx, total_mamba)
+                wrapper.mamba = BetaGatedMamba(
+                    wrapper.mamba, mamba_idx, total_mamba, shared_beta=shared_beta
+                )
                 mamba_idx += 1
+        if shared_beta is not None:
+            hybrid.register_parameter("shared_beta", shared_beta)
 
     # Freeze all, then unfreeze Mamba wrappers + sink tokens
     for p in hybrid.parameters():
@@ -191,6 +206,9 @@ def build_variant_student(args, cfg, device):
             for p in wrapper.parameters():
                 p.requires_grad_(True)
     hybrid.sink_tokens.sinks.requires_grad_(True)
+    # shared_beta is registered on hybrid (not on any wrapper) — unfreeze explicitly
+    if hasattr(hybrid, "shared_beta"):
+        hybrid.shared_beta.requires_grad_(True)
 
     hybrid = hybrid.to(device)
     hybrid.train()
@@ -305,18 +323,25 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
         val_log[args.steps] = val_loss
         print(f"  [{name}] Step {args.steps:5d}/{args.steps} | val={val_loss:.4f}  (final)")
 
-    # Variant D: report learned β, γ, α per layer
-    if cfg["use_beta"]:
-        print(f"\n  Variant D — learned β, γ, α per Mamba layer:")
+    # Gate variants: report learned β, γ, α per Mamba layer
+    gate_mode = cfg.get("gate_mode")
+    if gate_mode in ("constant", "shared_beta"):
+        if gate_mode == "shared_beta":
+            shared_b = student.shared_beta.item()
+            print(f"\n  Shared β = {shared_b:+.4f}")
+        print(f"  Learned γ and α per Mamba layer:")
         for plan in student.layer_plan:
             if plan["kind"] == "mamba":
                 wrapper = student.adapter.get_attention(student.layers[plan["layer_idx"]])
-                bg    = wrapper.mamba
-                b     = bg.beta.item()
-                g     = bg.gamma.item()
-                alpha = torch.sigmoid(bg.beta * bg.depth + bg.gamma).item()
-                print(f"    layer {plan['layer_idx']:2d} depth={bg.depth:.2f}: "
-                      f"β={b:+.3f}  γ={g:+.3f}  →  α={alpha:.3f}")
+                bg = wrapper.mamba
+                g  = bg.gamma.item()
+                if gate_mode == "shared_beta":
+                    alpha = torch.sigmoid(student.shared_beta * bg.depth + bg.gamma).item()
+                    print(f"    layer {plan['layer_idx']:2d} depth={bg.depth:.2f}: "
+                          f"γ={g:+.3f}  →  α={alpha:.3f}")
+                else:
+                    alpha = torch.sigmoid(bg.gamma).item()
+                    print(f"    layer {plan['layer_idx']:2d}: γ={g:+.3f}  →  α={alpha:.3f}")
 
     del student, optimizer, scheduler
     if scaler is not None:
@@ -348,8 +373,8 @@ def parse_args():
                    help="Number of held-out val chunks")
     p.add_argument("--batch-size",  type=int,   default=4,
                    help="Sequences per gradient step. Default 4 suits A100 80GB comfortably.")
-    p.add_argument("--variants",    default="ABCD",
-                   help="Which variants to run, e.g. 'ABCD' or 'AD'")
+    p.add_argument("--variants",    default="D_constant,D_proper",
+                   help="Comma-separated variants to run, e.g. 'D_constant,D_proper' or 'A,B,C,D_constant,D_proper'")
     return p.parse_args()
 
 
@@ -361,9 +386,13 @@ def main():
         print(f"GPU:    {torch.cuda.get_device_name(0)}")
         print(f"VRAM:   {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
-    selected = {k: VARIANTS[k] for k in args.variants if k in VARIANTS}
+    variant_names = [v.strip() for v in args.variants.split(",")]
+    selected = {k: VARIANTS[k] for k in variant_names if k in VARIANTS}
+    unknown = [k for k in variant_names if k not in VARIANTS]
+    if unknown:
+        print(f"Unknown variants: {unknown}. Available: {list(VARIANTS.keys())}")
     if not selected:
-        print(f"No valid variants in '{args.variants}'. Choose from A B C D.")
+        print("No valid variants selected.")
         return
 
     # --- AMP dtype ---
@@ -438,20 +467,29 @@ def main():
 
     print("=" * 72)
 
-    # Go/no-go
-    if "A" in results and "D" in results:
-        a = results["A"]["val_final"]
-        d = results["D"]["val_final"]
-        if math.isfinite(a) and math.isfinite(d):
-            improvement = (a - d) / a * 100
-            print(f"\nVariant D improvement over A: {improvement:.1f}%")
-            if improvement >= 10.0:
-                print("GO — Variant D beats baseline by ≥10%. "
-                      "Use exponential d_state + β for 9B Chimera.")
+    # Go/no-go: D_proper vs D_constant answers whether depth-aware gating adds value
+    if "D_proper" in results and "D_constant" in results:
+        dc = results["D_constant"]["val_final"]
+        dp = results["D_proper"]["val_final"]
+        if math.isfinite(dc) and math.isfinite(dp):
+            improvement = (dc - dp) / dc * 100
+            print(f"\nD_proper improvement over D_constant: {improvement:+.2f}%")
+            if improvement > 0:
+                print("RESULT: Shared-β depth gate adds value — use depth-aware gating for 9B Chimera.")
             else:
-                best = min(results, key=lambda k: results[k]["val_final"])
-                print(f"NOTE — Variant D did not reach ≥10% threshold.")
-                print(f"Best variant: {best} ({results[best]['label']})")
+                print("RESULT: Depth-awareness adds no value over per-layer constants.")
+                print("        Use sigmoid(γ_i) per layer; drop β entirely.")
+    elif "A" in results:
+        best = min(results, key=lambda k: results[k]["val_final"])
+        a = results["A"]["val_final"]
+        b = results[best]["val_final"]
+        if math.isfinite(a) and math.isfinite(b):
+            improvement = (a - b) / a * 100
+            print(f"\nBest variant: {best} — {improvement:.1f}% improvement over A")
+            if improvement >= 10.0:
+                print("GO — Use this d_state schedule for 9B Chimera.")
+            else:
+                print("NOTE — No variant reached ≥10% improvement threshold over A.")
 
     print("\nStep 4 complete.")
 

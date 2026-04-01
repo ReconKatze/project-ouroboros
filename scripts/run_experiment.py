@@ -60,13 +60,16 @@ def get_amp_dtype():
 # Variant definitions
 # ---------------------------------------------------------------------------
 
-def make_d_states(spec: dict, n_mamba: int) -> list:
+def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
     """Generate a d_state list for n_mamba layers from a schedule spec.
 
     Specs:
-        {"type": "uniform",     "d": 64}
-        {"type": "exponential", "d_min": 16, "d_max": 256}
-        {"type": "three_tier"}   -- uses d=16/64/128 split evenly across thirds
+        {"type": "uniform",       "d": 64}
+        {"type": "exponential",   "d_min": 16, "d_max": 256}
+        {"type": "three_tier"}     -- uses d=16/64/128 split evenly across thirds
+        {"type": "bell",          "d_min": 16, "d_max": 256}  -- single U-shape across all layers
+        {"type": "bell_per_span", "d_min": 16, "d_max": 256}  -- independent U-shape per attention span
+            requires spans= (list of Mamba layer counts per span, computed from attn indices)
     """
     t = spec["type"]
     if t == "uniform":
@@ -78,14 +81,27 @@ def make_d_states(spec: dict, n_mamba: int) -> list:
             for i in range(n_mamba)
         ]
     elif t == "bell":
-        # Reverse bell (U-shape): high at edges, low in middle.
-        # Uses a cosine: d_max at i=0 and i=n-1, d_min at i=(n-1)/2.
+        # Single U-shape across all Mamba layers: d_max at edges, d_min at centre.
         d_min, d_max = spec["d_min"], spec["d_max"]
         return [
             int(round(d_max - (d_max - d_min) *
                       (1 - math.cos(2 * math.pi * i / max(n_mamba - 1, 1))) / 2))
             for i in range(n_mamba)
         ]
+    elif t == "bell_per_span":
+        # Independent U-shape within each attention span.
+        # Each span gets its own 256→16→256 curve, so d_max falls at both
+        # ends of every span (absorption after attention + preparation before it).
+        if spans is None:
+            raise ValueError("bell_per_span requires spans= (list of Mamba counts per span)")
+        d_min, d_max = spec["d_min"], spec["d_max"]
+        result = []
+        for span_len in spans:
+            for i in range(span_len):
+                d = int(round(d_max - (d_max - d_min) *
+                              (1 - math.cos(2 * math.pi * i / max(span_len - 1, 1))) / 2))
+                result.append(d)
+        return result
     elif t == "three_tier":
         tier = n_mamba // 3
         return [16] * tier + [64] * tier + [128] * (n_mamba - 2 * tier)
@@ -123,6 +139,11 @@ VARIANTS = {
         "d_state_spec": {"type": "bell", "d_min": 16, "d_max": 256},
         "gate_mode":    "constant",
         "label":        "Reverse bell (d=256→16→256) + constant gate",
+    },
+    "D_bell2": {
+        "d_state_spec": {"type": "bell_per_span", "d_min": 16, "d_max": 256},
+        "gate_mode":    "constant",
+        "label":        "Per-span bell (256→16→256 each span) + constant gate",
     },
     "D_exp_inv": {
         "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 16},
@@ -230,7 +251,20 @@ def build_variant_student(args, cfg, device):
         else ATTN_KEEP_DEFAULTS.get(base.config.model_type, {0, 3, 7, 11})
     )
     n_mamba  = base.config.num_hidden_layers - len(effective_attn)
-    d_states = make_d_states(cfg["d_state_spec"], n_mamba)
+
+    # bell_per_span needs span sizes derived from the attention layer positions
+    spans = None
+    if cfg["d_state_spec"]["type"] == "bell_per_span":
+        n_layers   = base.config.num_hidden_layers
+        mamba_set  = set(range(n_layers)) - effective_attn
+        boundaries = [-1] + sorted(effective_attn) + [n_layers]
+        spans = [
+            sum(1 for l in mamba_set if boundaries[i] < l < boundaries[i + 1])
+            for i in range(len(boundaries) - 1)
+        ]
+        spans = [s for s in spans if s > 0]  # drop empty gaps (e.g. adjacent attn layers)
+
+    d_states = make_d_states(cfg["d_state_spec"], n_mamba, spans=spans)
     print(f"  Attn layers: {sorted(effective_attn)}  "
           f"({len(effective_attn)} attn, {n_mamba} Mamba) | "
           f"d_state: {d_states[0]}→{d_states[-1]}")

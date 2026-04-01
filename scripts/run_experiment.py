@@ -491,7 +491,7 @@ def parse_args():
     p.add_argument("--student",     default="Qwen/Qwen2.5-0.5B")
     p.add_argument("--steps",       type=int,   default=5000)
     p.add_argument("--lr",          type=float, default=5e-5)
-    p.add_argument("--seq-len",     type=int,   default=512)
+    p.add_argument("--seq-len",     type=int,   default=1024)
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--grad-accum",  type=int,   default=1,
                    help="Gradient accumulation steps (effective batch = grad_accum × 1)")

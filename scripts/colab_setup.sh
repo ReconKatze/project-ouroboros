@@ -25,9 +25,12 @@ pip install -q packaging ninja
 echo "[3/5] causal-conv1d..."
 pip install causal-conv1d --no-build-isolation
 
-# 4. Real Mamba kernels
-echo "[4/5] mamba-ssm..."
-pip install mamba-ssm --no-build-isolation
+# 4. Real Mamba kernels — install from git source to get Mamba3
+#    PyPI release (2.3.1) does not export Mamba3; git source does.
+#    MAMBA_FORCE_BUILD=TRUE forces CUDA extension compilation from source.
+echo "[4/5] mamba-ssm (from git source, includes Mamba3)..."
+MAMBA_FORCE_BUILD=TRUE pip install --no-cache-dir --force-reinstall \
+  git+https://github.com/state-spaces/mamba.git --no-build-isolation
 
 # 5. Flash attention (optional — speeds up kept attention layers)
 #    Soft-fail: if this fails don't abort, it's not required for Step 2

@@ -64,12 +64,16 @@ def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
     """Generate a d_state list for n_mamba layers from a schedule spec.
 
     Specs:
-        {"type": "uniform",       "d": 64}
-        {"type": "exponential",   "d_min": 16, "d_max": 256}
-        {"type": "three_tier"}     -- uses d=16/64/128 split evenly across thirds
-        {"type": "bell",          "d_min": 16, "d_max": 256}  -- single U-shape across all layers
-        {"type": "bell_per_span", "d_min": 16, "d_max": 256}  -- independent U-shape per attention span
-            requires spans= (list of Mamba layer counts per span, computed from attn indices)
+        {"type": "uniform",             "d": 64}
+        {"type": "exponential",         "d_min": 32, "d_max": 256}
+        {"type": "three_tier"}           -- uses d=32/64/128 split evenly across thirds
+        {"type": "bell",                "d_min": 32, "d_max": 256}
+            Single U-shape across all Mamba layers.
+        {"type": "bell_per_span",       "d_min": 32, "d_max": 256}
+            Independent U-shape per attention span. Requires spans=.
+        {"type": "bell_per_span_ramped","d_min": 32, "d_max": 256, "tail": [512, 1024]}
+            Per-span bell with fixed high-capacity tail layers (preparation phase).
+            Last len(tail) layers of each span are set to tail values. Requires spans=.
     """
     t = spec["type"]
     if t == "uniform":
@@ -90,8 +94,7 @@ def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
         ]
     elif t == "bell_per_span":
         # Independent U-shape within each attention span.
-        # Each span gets its own 256→16→256 curve, so d_max falls at both
-        # ends of every span (absorption after attention + preparation before it).
+        # d_max at both ends of every span: absorption after attention + preparation before it.
         if spans is None:
             raise ValueError("bell_per_span requires spans= (list of Mamba counts per span)")
         d_min, d_max = spec["d_min"], spec["d_max"]
@@ -102,9 +105,28 @@ def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
                               (1 - math.cos(2 * math.pi * i / max(span_len - 1, 1))) / 2))
                 result.append(d)
         return result
+    elif t == "bell_per_span_ramped":
+        # Per-span bell with explicit high-capacity tail for the preparation phase.
+        # The last len(tail) layers of each span are pinned to tail values (e.g. [512, 1024]).
+        # Remaining layers follow a standard bell curve.
+        # Rationale: H reads relevance from the pre-attention Mamba state — giving those
+        # layers maximum capacity improves H's token selection signal directly.
+        if spans is None:
+            raise ValueError("bell_per_span_ramped requires spans= argument")
+        d_min, d_max = spec["d_min"], spec["d_max"]
+        tail = spec.get("tail", [])
+        result = []
+        for span_len in spans:
+            body_len = max(span_len - len(tail), 1)
+            for i in range(body_len):
+                d = int(round(d_max - (d_max - d_min) *
+                              (1 - math.cos(2 * math.pi * i / max(body_len - 1, 1))) / 2))
+                result.append(d)
+            result.extend(tail[:span_len - body_len])
+        return result
     elif t == "three_tier":
         tier = n_mamba // 3
-        return [16] * tier + [64] * tier + [128] * (n_mamba - 2 * tier)
+        return [32] * tier + [64] * tier + [128] * (n_mamba - 2 * tier)
     else:
         raise ValueError(f"Unknown d_state_spec type: {t!r}")
 
@@ -126,34 +148,35 @@ VARIANTS = {
         "label":        "Three-tier (d=16/64/128)",
     },
     "D_constant": {
-        "d_state_spec": {"type": "exponential", "d_min": 16, "d_max": 256},
+        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 256},
         "gate_mode":    "constant",
-        "label":        "Exp gradient + constant gate (γ only)",
+        "label":        "Exp gradient (32→256) + constant gate",
     },
     "D_proper": {
-        "d_state_spec": {"type": "exponential", "d_min": 16, "d_max": 256},
+        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 256},
         "gate_mode":    "shared_beta",
-        "label":        "Exp gradient + shared-β depth gate",
+        "label":        "Exp gradient (32→256) + shared-β depth gate",
     },
     "D_bell": {
-        "d_state_spec": {"type": "bell", "d_min": 16, "d_max": 256},
+        "d_state_spec": {"type": "bell", "d_min": 32, "d_max": 256},
         "gate_mode":    "constant",
-        "label":        "Reverse bell (d=256→16→256) + constant gate",
+        "label":        "Global bell (256→32→256) + constant gate",
     },
     "D_bell2": {
-        "d_state_spec": {"type": "bell_per_span", "d_min": 16, "d_max": 256},
-        "gate_mode":    "constant",
-        "label":        "Per-span bell (256→16→256 each span) + constant gate",
-    },
-    "D_bell2_32": {
         "d_state_spec": {"type": "bell_per_span", "d_min": 32, "d_max": 256},
         "gate_mode":    "constant",
         "label":        "Per-span bell (256→32→256 each span) + constant gate",
     },
-    "D_exp_inv": {
-        "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 16},
+    "D_bell2_32": {
+        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 32, "d_max": 256,
+                         "tail": [512, 1024]},
         "gate_mode":    "constant",
-        "label":        "Inv. exponential (d=256→16) + constant gate",
+        "label":        "Per-span bell (256→32→...→512→1024 each span) + constant gate",
+    },
+    "D_exp_inv": {
+        "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 32},
+        "gate_mode":    "constant",
+        "label":        "Inv. exponential (256→32) + constant gate",
     },
     "B_gated": {
         "d_state_spec": {"type": "uniform", "d": 64},

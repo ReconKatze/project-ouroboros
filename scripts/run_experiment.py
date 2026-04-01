@@ -168,10 +168,10 @@ VARIANTS = {
         "label":        "Per-span bell (256→32→256 each span) + constant gate",
     },
     "D_bell2_32": {
-        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 32, "d_max": 256,
-                         "tail": [512, 1024]},
+        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 32, "d_max": 192,
+                         "tail": [224, 256]},
         "gate_mode":    "constant",
-        "label":        "Per-span bell (256→32→...→512→1024 each span) + constant gate",
+        "label":        "Per-span bell asymmetric (192→32→192→224→256 each span) + constant gate",
     },
     "D_exp_inv": {
         "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 32},

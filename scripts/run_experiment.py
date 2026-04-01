@@ -65,13 +65,13 @@ def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
 
     Specs:
         {"type": "uniform",             "d": 64}
-        {"type": "exponential",         "d_min": 32, "d_max": 256}
+        {"type": "exponential",         "d_min": 64, "d_max": 256}
         {"type": "three_tier"}           -- uses d=32/64/128 split evenly across thirds
-        {"type": "bell",                "d_min": 32, "d_max": 256}
+        {"type": "bell",                "d_min": 64, "d_max": 256}
             Single U-shape across all Mamba layers.
-        {"type": "bell_per_span",       "d_min": 32, "d_max": 256}
+        {"type": "bell_per_span",       "d_min": 64, "d_max": 256}
             Independent U-shape per attention span. Requires spans=.
-        {"type": "bell_per_span_ramped","d_min": 32, "d_max": 256, "tail": [512, 1024]}
+        {"type": "bell_per_span_ramped","d_min": 64, "d_max": 256, "tail": [224, 256]}
             Per-span bell with fixed high-capacity tail layers (preparation phase).
             Last len(tail) layers of each span are set to tail values. Requires spans=.
     """
@@ -148,35 +148,35 @@ VARIANTS = {
         "label":        "Three-tier (d=16/64/128)",
     },
     "D_constant": {
-        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 256},
+        "d_state_spec": {"type": "exponential", "d_min": 64, "d_max": 256},
         "gate_mode":    "constant",
-        "label":        "Exp gradient (32→256) + constant gate",
+        "label":        "Exp gradient (64→256) + constant gate",
     },
     "D_proper": {
-        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 256},
+        "d_state_spec": {"type": "exponential", "d_min": 64, "d_max": 256},
         "gate_mode":    "shared_beta",
-        "label":        "Exp gradient (32→256) + shared-β depth gate",
+        "label":        "Exp gradient (64→256) + shared-β depth gate",
     },
     "D_bell": {
-        "d_state_spec": {"type": "bell", "d_min": 32, "d_max": 256},
+        "d_state_spec": {"type": "bell", "d_min": 64, "d_max": 256},
         "gate_mode":    "constant",
-        "label":        "Global bell (256→32→256) + constant gate",
+        "label":        "Global bell (256→64→256) + constant gate",
     },
     "D_bell2": {
-        "d_state_spec": {"type": "bell_per_span", "d_min": 32, "d_max": 256},
+        "d_state_spec": {"type": "bell_per_span", "d_min": 64, "d_max": 256},
         "gate_mode":    "constant",
-        "label":        "Per-span bell (256→32→256 each span) + constant gate",
+        "label":        "Per-span bell (256→64→256 each span) + constant gate",
     },
     "D_bell2_32": {
-        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 32, "d_max": 192,
+        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 64, "d_max": 192,
                          "tail": [224, 256]},
         "gate_mode":    "constant",
-        "label":        "Per-span bell asymmetric (192→32→192→224→256 each span) + constant gate",
+        "label":        "Per-span bell asymmetric (192→64→192→224→256 each span) + constant gate",
     },
     "D_exp_inv": {
-        "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 32},
+        "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 64},
         "gate_mode":    "constant",
-        "label":        "Inv. exponential (256→32) + constant gate",
+        "label":        "Inv. exponential (256→64) + constant gate",
     },
     "B_gated": {
         "d_state_spec": {"type": "uniform", "d": 64},

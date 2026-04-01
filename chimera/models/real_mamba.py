@@ -1,6 +1,8 @@
 """Real Mamba block using mamba-ssm (CUDA required).
 
-Used on Colab T4 (Steps 2-4). Falls back to FallbackMamba on CPU.
+Used on Colab A100 (Steps 2-4). Falls back to FallbackMamba on CPU.
+Uses Mamba-3 (mamba-ssm >= 2.3.1): complex-valued states via RoPE,
+no d_state ceiling, MIMO mode available via is_mimo=True.
 """
 
 import torch
@@ -8,19 +10,21 @@ import torch.nn as nn
 
 
 class RealMambaBlock(nn.Module):
-    """Wraps mamba-ssm's Mamba layer for use in the hybrid model.
+    """Wraps mamba-ssm's Mamba3 layer for use in the hybrid model.
 
-    Requires CUDA + mamba-ssm package. Install with:
+    Requires CUDA + mamba-ssm >= 2.3.1. Install with:
         pip install mamba-ssm --no-build-isolation
 
-    The mamba-ssm Mamba class handles its own input projection and
-    output projection internally, so this wrapper is minimal.
+    Mamba-3 uses RoPE-based complex state updates instead of d_conv.
+    No hard d_state ceiling (Mamba-1 was capped at 256 by CUDA kernel).
+    Mamba3.forward() signature: forward(u, seq_idx, cu_seqlens, inference_params)
+    — calling self.mamba(x) passes x as u with all optional args defaulting.
     """
 
-    def __init__(self, d_model: int, d_state: int = 16):
+    def __init__(self, d_model: int, d_state: int = 64):
         super().__init__()
-        from mamba_ssm import Mamba
-        self.mamba = Mamba(d_model=d_model, d_state=d_state)
+        from mamba_ssm import Mamba3
+        self.mamba = Mamba3(d_model=d_model, d_state=d_state)
 
     def forward(self, x):
         """Forward pass through Mamba SSM.
@@ -34,7 +38,7 @@ class RealMambaBlock(nn.Module):
         return self.mamba(x)
 
 
-def create_mamba_block(d_model: int, d_state: int = 16, device: str = "cpu") -> nn.Module:
+def create_mamba_block(d_model: int, d_state: int = 64, device: str = "cpu") -> nn.Module:
     """Factory: returns RealMambaBlock on CUDA or FallbackMamba on CPU.
 
     Args:

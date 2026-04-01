@@ -145,6 +145,11 @@ VARIANTS = {
         "gate_mode":    "constant",
         "label":        "Per-span bell (256→16→256 each span) + constant gate",
     },
+    "D_bell2_32": {
+        "d_state_spec": {"type": "bell_per_span", "d_min": 32, "d_max": 256},
+        "gate_mode":    "constant",
+        "label":        "Per-span bell (256→32→256 each span) + constant gate",
+    },
     "D_exp_inv": {
         "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 16},
         "gate_mode":    "constant",

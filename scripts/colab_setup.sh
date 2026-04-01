@@ -28,9 +28,17 @@ pip install causal-conv1d --no-build-isolation
 # 4. Real Mamba kernels — install from git source to get Mamba3
 #    PyPI release (2.3.1) does not export Mamba3; git source does.
 #    MAMBA_FORCE_BUILD=TRUE forces CUDA extension compilation from source.
+#    NOTE: mamba-ssm git source upgrades torch to 2.11.0 (CUDA 13), which
+#    breaks Colab's pre-installed torchvision (cu128). Step 4b fixes that.
 echo "[4/5] mamba-ssm (from git source, includes Mamba3)..."
 MAMBA_FORCE_BUILD=TRUE pip install --no-cache-dir --force-reinstall \
   git+https://github.com/state-spaces/mamba.git --no-build-isolation
+
+# 4b. Re-align torchvision with the torch version mamba-ssm pulled in.
+#     Without this, transformers crashes loading any model (torchvision
+#     CUDA version mismatch RuntimeError on import).
+echo "[4b/5] torchvision (align with torch installed by mamba-ssm)..."
+pip install torchvision -U -q
 
 # 5. Flash attention (optional — speeds up kept attention layers)
 #    Soft-fail: if this fails don't abort, it's not required for Step 2

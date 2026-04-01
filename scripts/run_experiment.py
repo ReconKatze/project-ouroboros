@@ -360,12 +360,17 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
     use_scaler       = (amp_dtype == torch.float16)
     scaler           = torch.amp.GradScaler("cuda") if use_scaler else None
 
-    # Linear LR warmup over first warmup_steps optimizer steps
+    # Warmup then cosine decay: ramps to peak LR over warmup_steps, then decays to ~0
     warmup_steps = min(200, args.steps // 10)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lambda s: min(1.0, (s + 1) / warmup_steps) if warmup_steps > 0 else 1.0,
-    )
+    total_steps  = args.steps
+
+    def lr_schedule(s):
+        if warmup_steps > 0 and s < warmup_steps:
+            return (s + 1) / warmup_steps
+        progress = (s - warmup_steps) / max(total_steps - warmup_steps, 1)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_schedule)
 
     val_log   = {}   # {step: val_loss}
     ema_loss  = None

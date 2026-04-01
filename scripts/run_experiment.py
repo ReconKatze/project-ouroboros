@@ -282,7 +282,7 @@ def build_variant_student(args, cfg, device):
 
     # bell_per_span needs span sizes derived from the attention layer positions
     spans = None
-    if cfg["d_state_spec"]["type"] == "bell_per_span":
+    if cfg["d_state_spec"]["type"] in ("bell_per_span", "bell_per_span_ramped"):
         n_layers   = base.config.num_hidden_layers
         mamba_set  = set(range(n_layers)) - effective_attn
         boundaries = [-1] + sorted(effective_attn) + [n_layers]

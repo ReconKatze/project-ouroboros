@@ -60,6 +60,16 @@ def get_amp_dtype():
 # Variant definitions
 # ---------------------------------------------------------------------------
 
+def _snap16(x: float) -> int:
+    """Round x to the nearest multiple of 16 (minimum 16).
+
+    Mamba-3 requires headdim_qk (= d_state) to be even; Triton kernels prefer
+    multiples of 16. Snapping keeps all our target values (32, 64, 96, 128)
+    unchanged while fixing bell/exponential intermediate values (e.g. 53 → 48).
+    """
+    return max(16, round(x / 16) * 16)
+
+
 def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
     """Generate a d_state list for n_mamba layers from a schedule spec.
 
@@ -81,15 +91,15 @@ def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
     elif t == "exponential":
         d_min, d_max = spec["d_min"], spec["d_max"]
         return [
-            int(round(d_min * (d_max / d_min) ** (i / max(n_mamba - 1, 1))))
+            _snap16(d_min * (d_max / d_min) ** (i / max(n_mamba - 1, 1)))
             for i in range(n_mamba)
         ]
     elif t == "bell":
         # Single U-shape across all Mamba layers: d_max at edges, d_min at centre.
         d_min, d_max = spec["d_min"], spec["d_max"]
         return [
-            int(round(d_max - (d_max - d_min) *
-                      (1 - math.cos(2 * math.pi * i / max(n_mamba - 1, 1))) / 2))
+            _snap16(d_max - (d_max - d_min) *
+                    (1 - math.cos(2 * math.pi * i / max(n_mamba - 1, 1))) / 2)
             for i in range(n_mamba)
         ]
     elif t == "bell_per_span":
@@ -101,14 +111,14 @@ def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
         result = []
         for span_len in spans:
             for i in range(span_len):
-                d = int(round(d_max - (d_max - d_min) *
-                              (1 - math.cos(2 * math.pi * i / max(span_len - 1, 1))) / 2))
+                d = _snap16(d_max - (d_max - d_min) *
+                            (1 - math.cos(2 * math.pi * i / max(span_len - 1, 1))) / 2)
                 result.append(d)
         return result
     elif t == "bell_per_span_ramped":
         # Per-span bell with explicit high-capacity tail for the preparation phase.
-        # The last len(tail) layers of each span are pinned to tail values (e.g. [512, 1024]).
-        # Remaining layers follow a standard bell curve.
+        # The last len(tail) layers of each span are pinned to tail values (e.g. [96, 128]).
+        # Remaining layers follow a standard bell curve snapped to multiples of 16.
         # Rationale: H reads relevance from the pre-attention Mamba state — giving those
         # layers maximum capacity improves H's token selection signal directly.
         if spans is None:
@@ -119,8 +129,8 @@ def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
         for span_len in spans:
             body_len = max(span_len - len(tail), 1)
             for i in range(body_len):
-                d = int(round(d_max - (d_max - d_min) *
-                              (1 - math.cos(2 * math.pi * i / max(body_len - 1, 1))) / 2))
+                d = _snap16(d_max - (d_max - d_min) *
+                            (1 - math.cos(2 * math.pi * i / max(body_len - 1, 1))) / 2)
                 result.append(d)
             result.extend(tail[:span_len - body_len])
         return result

@@ -237,7 +237,14 @@ def load_data(tokenizer, seq_len, n_train, n_val):
 # ---------------------------------------------------------------------------
 
 def distill_loss(student_logits, teacher_logits, T=2.0):
-    """Temperature-scaled KL with per-token std normalisation."""
+    """Temperature-scaled KL with per-token std normalisation.
+
+    Handles teacher/student vocab size mismatch (e.g. Qwen2.5-7B has 152064
+    tokens vs 1.5B's 151936) by truncating to the smaller vocab.
+    """
+    vocab = min(student_logits.size(-1), teacher_logits.size(-1))
+    student_logits = student_logits[..., :vocab]
+    teacher_logits = teacher_logits[..., :vocab]
     s = student_logits / (student_logits.std(dim=-1, keepdim=True) + 1e-6)
     t = teacher_logits / (teacher_logits.std(dim=-1, keepdim=True) + 1e-6)
     log_p_s = F.log_softmax(s / T, dim=-1)

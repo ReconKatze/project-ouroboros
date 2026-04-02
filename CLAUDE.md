@@ -1,7 +1,7 @@
 # Project Ouroboros
 
-Zero-cost validation pipeline for Project Chimera (~9.3B hybrid Mamba/Transformer coding model).
-Proves every novel architectural concept at small scale (0.5B) before spending $1,150-$2,298 on Lambda.ai.
+Zero-cost validation pipeline for Project Chimera (~9.3B hybrid Mamba-3/Transformer coding model).
+Proves every novel architectural concept at small scale (1.5B) before spending $1,150-$2,298 on Lambda.ai.
 
 ## Environment
 
@@ -9,7 +9,7 @@ Proves every novel architectural concept at small scale (0.5B) before spending $
 - **Python venv**: `.venv/` (Python 3.13, CPU-only torch 2.11, transformers 5.4)
 - **Activate**: `source .venv/bin/activate`
 - **HF cache**: Set `HF_HOME="/run/media/deck/Katze2/Project Ouroboros/.cache/huggingface"` before running scripts
-- **Hardware**: Steam Deck (AMD GPU, no CUDA). CPU-only for Steps 1 & 5. Colab T4 for Steps 2-4.
+- **Hardware**: Steam Deck (AMD GPU, no CUDA). CPU-only for Steps 1 & 5. Colab A100 80GB for Steps 2-4.
 - **Space constraint**: All downloads must go to this external drive, not the main drive.
 
 ## Project Structure
@@ -25,17 +25,17 @@ chimera/
     layer_plan.py         # build_layer_plan(), ATTN_KEEP_DEFAULTS
 scripts/
   convert_and_test.py     # Steps 1 & 2 entry point (model-agnostic)
-  colab_setup.sh          # Colab T4 dependency installer
+  colab_setup.sh          # Colab A100 dependency installer
 ```
 
 ## Steps & Status
 
 | Step | Description | Hardware | Status |
 |------|-------------|----------|--------|
-| 1 | Pythia-160M Mamba conversion | CPU | **COMPLETE** |
-| 2 | Qwen2.5-0.5B conversion (real Mamba kernels) | Colab T4 | **COMPLETE** |
-| 3 | Distillation from 3B teacher | Colab T4 | **COMPLETE** |
-| 4 | d_state gradient experiment (4 variants) | Colab T4 | Not started |
+| 1 | Pythia-160M Mamba-3 conversion | CPU | **COMPLETE** |
+| 2 | Qwen2.5-0.5B conversion (real Mamba-3 kernels) | Colab A100 | **COMPLETE** |
+| 3 | Distillation from 7B teacher | Colab A100 | **COMPLETE** |
+| 4 | d_state gradient experiment (7 variants, 1.5B student, 7B teacher) | Colab A100 | **IN PROGRESS** |
 | 5 | GGUF export | CPU | Not started |
 
 ## Critical Technical Details Discovered
@@ -65,8 +65,9 @@ v_w = w[:, 2, :, :].contiguous().view(-1, hidden_size)
 - V weights → `in_proj_x` (X = input content)
 
 ### Layer Plan
-- 12-layer Pythia: keep {0, 3, 7, 11} as attention (4 anchors), convert 8 to Mamba
-- 24-layer Qwen: keep {0, 4, 8, 12, 16, 23} as attention, convert 18 to Mamba (Step 2)
+- 12-layer Pythia: keep {0, 3, 7, 11} as attention (4 anchors), convert 8 to Mamba-3
+- 24-layer Qwen2.5-0.5B: keep {0, 4, 8, 12, 16, 23} as attention, convert 18 to Mamba-3 (Step 2)
+- 28-layer Qwen2.5-1.5B: keep {0, 9, 18, 27} as attention (4 anchors), convert 24 to Mamba-3 (Step 4)
 
 ### Step 2 Results (Qwen2.5-0.5B, Colab T4, real mamba-ssm kernels)
 - Model: Qwen2.5-0.5B (qwen2, 24 layers, 896 hidden, 14Q/2KV GQA, head_dim=64)
@@ -80,10 +81,13 @@ v_w = w[:, 2, :, :].contiguous().view(-1, hidden_size)
 - **Real Mamba kernels confirmed executing on T4 GPU**
 
 ### Colab Environment Notes
-- causal-conv1d and mamba-ssm must be compiled from source (~35-40 min total on T4)
-- Do NOT `pip install torch` in setup script — Colab's pre-installed CUDA torch gets replaced by CPU-only PyPI torch, breaking compilation
+- mamba-ssm must be installed from git source (`MAMBA_FORCE_BUILD=TRUE pip install git+https://github.com/state-spaces/mamba.git`). PyPI 2.3.1 does not export Mamba3.
+- mamba-ssm git source upgrades torch to 2.11.0 (CUDA 13) — run `pip install torchvision -U` after to re-align torchvision.
+- Do NOT `pip install torch` in setup script — Colab's pre-installed CUDA torch gets replaced by CPU-only PyPI torch, breaking compilation.
 - flash-attn fails to build (not needed for Steps 2-4)
 - bitsandbytes and datasets install fine as pre-built wheels
+- **d_state must be a multiple of 16** — Mamba-3 uses d_state as headdim_qk; odd values fail kernel assertion. `_snap16()` in `make_d_states` handles this.
+- **Vocab mismatch**: Qwen2.5-7B vocab=152064, Qwen2.5-1.5B vocab=151936. `distill_loss()` truncates to min vocab automatically.
 
 ### Step 1 Results
 - Cosine similarity: 0.996 (high due to parallel residual + 4 kept attention layers)
@@ -106,6 +110,6 @@ python scripts/convert_and_test.py --model EleutherAI/pythia-160m --device cpu
 
 ## Key Design Principles
 - FallbackMamba is deliberately simple (gated linear unit, no recurrence) — tests wiring, not SSM quality
-- Real Mamba kernels (mamba-ssm, CUDA-only) used in Steps 2-4 on Colab
+- Real Mamba-3 kernels (mamba-ssm git source, CUDA-only) used in Steps 2-4 on Colab
 - Sink tokens (4 learnable) prepended to give attention layers initial tokens
 - All code built here becomes reusable scaffolding for the full 9B Chimera run

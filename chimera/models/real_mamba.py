@@ -21,10 +21,16 @@ class RealMambaBlock(nn.Module):
     — calling self.mamba(x) passes x as u with all optional args defaulting.
     """
 
-    def __init__(self, d_model: int, d_state: int = 64):
+    def __init__(self, d_model: int, d_state: int = 64, headdim: int = 64):
         super().__init__()
         from mamba_ssm import Mamba3
-        self.mamba = Mamba3(d_model=d_model, d_state=d_state)
+        # Mamba3 constraint: headdim_angles = (d_state * rope_fraction) // 2 <= headdim // 2
+        # Clamp rope_fraction so headdim_angles stays at headdim//2 for any d_state.
+        # d_state <= headdim: rope_fraction stays at 0.5 (default, full oscillatory coverage).
+        # d_state >  headdim: rope_fraction scales down, keeping absolute oscillatory count fixed.
+        rope_fraction = min(0.5, float(headdim) / d_state)
+        self.mamba = Mamba3(d_model=d_model, d_state=d_state, headdim=headdim,
+                            rope_fraction=rope_fraction)
 
     def forward(self, x):
         """Forward pass through Mamba SSM.

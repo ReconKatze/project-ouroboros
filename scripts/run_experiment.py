@@ -138,9 +138,9 @@ VARIANTS = {
         "label":        "Uniform small (d=16)",
     },
     "B": {
-        "d_state_spec": {"type": "uniform", "d": 64},
+        "d_state_spec": {"type": "uniform", "d": 32},
         "gate_mode":    None,
-        "label":        "Uniform large (d=64)",
+        "label":        "Uniform (d=32)",
     },
     "C": {
         "d_state_spec": {"type": "three_tier"},
@@ -148,40 +148,40 @@ VARIANTS = {
         "label":        "Three-tier (d=16/64/128)",
     },
     "D_constant": {
-        "d_state_spec": {"type": "exponential", "d_min": 64, "d_max": 256},
+        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 128},
         "gate_mode":    "constant",
-        "label":        "Exp gradient (64→256) + constant gate",
+        "label":        "Exp gradient (32→128) + constant gate",
     },
     "D_proper": {
-        "d_state_spec": {"type": "exponential", "d_min": 64, "d_max": 256},
+        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 128},
         "gate_mode":    "shared_beta",
-        "label":        "Exp gradient (64→256) + shared-β depth gate",
+        "label":        "Exp gradient (32→128) + shared-β depth gate",
     },
     "D_bell": {
-        "d_state_spec": {"type": "bell", "d_min": 64, "d_max": 256},
+        "d_state_spec": {"type": "bell", "d_min": 32, "d_max": 128},
         "gate_mode":    "constant",
-        "label":        "Global bell (256→64→256) + constant gate",
+        "label":        "Global bell (128→32→128) + constant gate",
     },
     "D_bell2": {
-        "d_state_spec": {"type": "bell_per_span", "d_min": 64, "d_max": 256},
+        "d_state_spec": {"type": "bell_per_span", "d_min": 32, "d_max": 64},
         "gate_mode":    "constant",
-        "label":        "Per-span bell (256→64→256 each span) + constant gate",
+        "label":        "Per-span bell (64→32→64 each span) + constant gate",
     },
     "D_bell2_32": {
-        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 64, "d_max": 192,
-                         "tail": [512, 1024]},
+        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 32, "d_max": 64,
+                         "tail": [96, 128]},
         "gate_mode":    "constant",
-        "label":        "Per-span bell asymmetric (192→64→192→512→1024 each span) + constant gate",
+        "label":        "Per-span bell asymmetric (64→32→64→96→128 each span) + constant gate",
     },
     "D_exp_inv": {
-        "d_state_spec": {"type": "exponential", "d_min": 256, "d_max": 64},
+        "d_state_spec": {"type": "exponential", "d_min": 128, "d_max": 32},
         "gate_mode":    "constant",
-        "label":        "Inv. exponential (256→64) + constant gate",
+        "label":        "Inv. exponential (128→32) + constant gate",
     },
     "B_gated": {
-        "d_state_spec": {"type": "uniform", "d": 64},
+        "d_state_spec": {"type": "uniform", "d": 32},
         "gate_mode":    "constant",
-        "label":        "Uniform large (d=64) + constant gate",
+        "label":        "Uniform (d=32) + constant gate",
     },
 }
 

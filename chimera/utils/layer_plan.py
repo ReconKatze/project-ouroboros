@@ -3,7 +3,7 @@
 # Default attention anchor indices per model
 ATTN_KEEP_DEFAULTS = {
     "gpt_neox": {0, 3, 7, 11},          # Pythia-160M (12 layers)
-    "qwen2":    {0, 4, 8, 12, 16, 23},  # Qwen2.5-0.5B (24 layers)
+    "qwen2":    {0, 9, 18, 27},          # Qwen2.5-1.5B (28 layers, 4-attn Round 1.5 config)
 }
 
 

@@ -488,7 +488,7 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
 def parse_args():
     p = argparse.ArgumentParser(description="Step 4: d_state gradient experiment")
     p.add_argument("--teacher",     default="Qwen/Qwen2.5-3B")
-    p.add_argument("--student",     default="Qwen/Qwen2.5-0.5B")
+    p.add_argument("--student",     default="Qwen/Qwen2.5-1.5B")
     p.add_argument("--steps",       type=int,   default=5000)
     p.add_argument("--lr",          type=float, default=5e-5)
     p.add_argument("--seq-len",     type=int,   default=1024)
@@ -507,7 +507,7 @@ def parse_args():
                    help="Comma-separated variants to run, e.g. 'B,D_constant' or 'A,B,C,D_constant,D_proper'")
     p.add_argument("--attn-indices", default=None,
                    help="Comma-separated attention layer indices, e.g. '0,11,23' for 3-attention "
-                        "variant. Default: model-type preset ({0,4,8,12,16,23} for Qwen2.5-0.5B).")
+                        "variant. Default: model-type preset ({0,9,18,27} for Qwen2.5-1.5B).")
     return p.parse_args()
 
 

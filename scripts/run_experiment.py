@@ -189,9 +189,9 @@ VARIANTS = {
         "label":        "Inv. exponential (128→32) + constant gate",
     },
     "B_gated": {
-        "d_state_spec": {"type": "uniform", "d": 32},
+        "d_state_spec": {"type": "uniform", "d": 64},
         "gate_mode":    "constant",
-        "label":        "Uniform (d=32) + constant gate",
+        "label":        "Uniform (d=64) + constant gate",
     },
 }
 

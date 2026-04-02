@@ -497,7 +497,7 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
 
 def parse_args():
     p = argparse.ArgumentParser(description="Step 4: d_state gradient experiment")
-    p.add_argument("--teacher",     default="Qwen/Qwen2.5-3B")
+    p.add_argument("--teacher",     default="Qwen/Qwen2.5-7B")
     p.add_argument("--student",     default="Qwen/Qwen2.5-1.5B")
     p.add_argument("--steps",       type=int,   default=5000)
     p.add_argument("--lr",          type=float, default=5e-5)

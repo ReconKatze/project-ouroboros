@@ -1,0 +1,540 @@
+Device: cuda
+GPU:    NVIDIA A100-SXM4-80GB
+VRAM:   85.1 GB
+AMP dtype: bfloat16  |  GradScaler: no (bfloat16)
+LR: 5e-05 × batch_size 4 → effective LR 2.00e-04
+
+Variants: ['D_bell2_32']  |  Steps each: 10000  |  Grad accum: 1  |  Val every: 250
+
+Loading teacher: Qwen/Qwen2.5-7B (bfloat16)...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights: 100% 339/339 [00:00<00:00, 6242.95it/s]
+Teacher loaded.
+Pre-tokenising data (train=40500, val=100, seq_len=1024)...
+  Loaded 40500 train chunks, 100 val chunks.
+
+============================================================
+Variant D_bell2_32: Per-span bell asymmetric (64→32→64→96→128 each span) + constant gate
+============================================================
+Loading weights: 100% 338/338 [00:00<00:00, 773.51it/s]
+  Attn layers: [0, 9, 18, 27]  (4 attn, 24 Mamba) | d_state: 64→128
+  Trainable params: 350,514,456 / 1,762,059,032
+  [D_bell2_32] Step 0 — initial val loss...
+  [D_bell2_32] Step    0/10000 | val=991.1930  (pre-training)
+  [D_bell2_32] Step     1/10000 | train_ema=1001.084 | lr=2.00e-06
+  [D_bell2_32] Step   100/10000 | train_ema= 341.485 | lr=1.01e-04
+  [D_bell2_32] Step   200/10000 | train_ema= 308.702 | lr=2.00e-04
+  [D_bell2_32] Step   250/10000 | train_ema= 299.852 | val= 304.028 | lr=2.00e-04
+  [D_bell2_32] Step   300/10000 | train_ema= 299.162 | lr=2.00e-04
+  [D_bell2_32] Step   400/10000 | train_ema= 294.524 | lr=2.00e-04
+  [D_bell2_32] Step   500/10000 | train_ema= 287.476 | val= 297.240 | lr=2.00e-04
+  [D_bell2_32] Step   600/10000 | train_ema= 282.237 | lr=1.99e-04
+  [D_bell2_32] Step   700/10000 | train_ema= 289.753 | lr=1.99e-04
+  [D_bell2_32] Step   750/10000 | train_ema= 281.814 | val= 283.306 | lr=1.98e-04
+  [D_bell2_32] Step   800/10000 | train_ema= 287.796 | lr=1.98e-04
+  [D_bell2_32] Step   900/10000 | train_ema= 271.411 | lr=1.97e-04
+  [D_bell2_32] Step  1000/10000 | train_ema= 279.756 | val= 275.402 | lr=1.97e-04
+  [D_bell2_32] Step  1100/10000 | train_ema= 272.530 | lr=1.96e-04
+  [D_bell2_32] Step  1200/10000 | train_ema= 262.352 | lr=1.95e-04
+  [D_bell2_32] Step  1250/10000 | train_ema= 258.650 | val= 271.149 | lr=1.94e-04
+  [D_bell2_32] Step  1300/10000 | train_ema= 266.689 | lr=1.94e-04
+  [D_bell2_32] Step  1400/10000 | train_ema= 266.032 | lr=1.93e-04
+  [D_bell2_32] Step  1500/10000 | train_ema= 268.359 | val= 270.829 | lr=1.91e-04
+  [D_bell2_32] Step  1600/10000 | train_ema= 271.147 | lr=1.90e-04
+  [D_bell2_32] Step  1700/10000 | train_ema= 269.987 | lr=1.89e-04
+  [D_bell2_32] Step  1750/10000 | train_ema= 266.801 | val= 267.086 | lr=1.88e-04
+  [D_bell2_32] Step  1800/10000 | train_ema= 276.523 | lr=1.87e-04
+  [D_bell2_32] Step  1900/10000 | train_ema= 256.676 | lr=1.86e-04
+  [D_bell2_32] Step  2000/10000 | train_ema= 262.936 | val= 265.240 | lr=1.84e-04
+  [D_bell2_32] Step  2100/10000 | train_ema= 258.945 | lr=1.82e-04
+  [D_bell2_32] Step  2200/10000 | train_ema= 263.607 | lr=1.80e-04
+  [D_bell2_32] Step  2250/10000 | train_ema= 260.582 | val= 262.937 | lr=1.79e-04
+  [D_bell2_32] Step  2300/10000 | train_ema= 273.268 | lr=1.78e-04
+  [D_bell2_32] Step  2400/10000 | train_ema= 259.227 | lr=1.76e-04
+  [D_bell2_32] Step  2500/10000 | train_ema= 255.665 | val= 261.922 | lr=1.74e-04
+  [D_bell2_32] Step  2600/10000 | train_ema= 261.145 | lr=1.72e-04
+  [D_bell2_32] Step  2700/10000 | train_ema= 257.900 | lr=1.70e-04
+  [D_bell2_32] Step  2750/10000 | train_ema= 254.772 | val= 260.002 | lr=1.68e-04
+  [D_bell2_32] Step  2800/10000 | train_ema= 258.099 | lr=1.67e-04
+  [D_bell2_32] Step  2900/10000 | train_ema= 248.884 | lr=1.65e-04
+  [D_bell2_32] Step  3000/10000 | train_ema= 252.635 | val= 259.567 | lr=1.62e-04
+  [D_bell2_32] Step  3100/10000 | train_ema= 263.530 | lr=1.60e-04
+  [D_bell2_32] Step  3200/10000 | train_ema= 251.733 | lr=1.57e-04
+  [D_bell2_32] Step  3250/10000 | train_ema= 273.492 | val= 258.990 | lr=1.56e-04
+  [D_bell2_32] Step  3300/10000 | train_ema= 263.148 | lr=1.55e-04
+  [D_bell2_32] Step  3400/10000 | train_ema= 252.435 | lr=1.52e-04
+  [D_bell2_32] Step  3500/10000 | train_ema= 250.431 | val= 256.593 | lr=1.49e-04
+  [D_bell2_32] Step  3600/10000 | train_ema= 252.464 | lr=1.46e-04
+  [D_bell2_32] Step  3700/10000 | train_ema= 252.365 | lr=1.43e-04
+  [D_bell2_32] Step  3750/10000 | train_ema= 248.139 | val= 255.828 | lr=1.42e-04
+  [D_bell2_32] Step  3800/10000 | train_ema= 254.082 | lr=1.40e-04
+  [D_bell2_32] Step  3900/10000 | train_ema= 253.403 | lr=1.38e-04
+  [D_bell2_32] Step  4000/10000 | train_ema= 254.903 | val= 255.345 | lr=1.35e-04
+  [D_bell2_32] Step  4100/10000 | train_ema= 251.922 | lr=1.32e-04
+  [D_bell2_32] Step  4200/10000 | train_ema= 250.015 | lr=1.28e-04
+  [D_bell2_32] Step  4250/10000 | train_ema= 254.840 | val= 254.640 | lr=1.27e-04
+  [D_bell2_32] Step  4300/10000 | train_ema= 254.510 | lr=1.25e-04
+  [D_bell2_32] Step  4400/10000 | train_ema= 250.096 | lr=1.22e-04
+  [D_bell2_32] Step  4500/10000 | train_ema= 258.154 | val= 253.891 | lr=1.19e-04
+  [D_bell2_32] Step  4600/10000 | train_ema= 247.398 | lr=1.16e-04
+  [D_bell2_32] Step  4700/10000 | train_ema= 249.422 | lr=1.13e-04
+  [D_bell2_32] Step  4750/10000 | train_ema= 242.303 | val= 253.384 | lr=1.11e-04
+  [D_bell2_32] Step  4800/10000 | train_ema= 261.548 | lr=1.10e-04
+  [D_bell2_32] Step  4900/10000 | train_ema= 248.533 | lr=1.06e-04
+  [D_bell2_32] Step  5000/10000 | train_ema= 257.488 | val= 253.208 | lr=1.03e-04
+  [D_bell2_32] Step  5100/10000 | train_ema= 245.431 | lr=1.00e-04
+  [D_bell2_32] Step  5200/10000 | train_ema= 247.358 | lr=9.68e-05
+  [D_bell2_32] Step  5250/10000 | train_ema= 251.567 | val= 251.880 | lr=9.52e-05
+  [D_bell2_32] Step  5300/10000 | train_ema= 246.390 | lr=9.36e-05
+  [D_bell2_32] Step  5400/10000 | train_ema= 262.782 | lr=9.04e-05
+  [D_bell2_32] Step  5500/10000 | train_ema= 253.065 | val= 251.633 | lr=8.72e-05
+  [D_bell2_32] Step  5600/10000 | train_ema= 250.409 | lr=8.40e-05
+  [D_bell2_32] Step  5700/10000 | train_ema= 247.156 | lr=8.09e-05
+  [D_bell2_32] Step  5750/10000 | train_ema= 246.718 | val= 251.160 | lr=7.93e-05
+  [D_bell2_32] Step  5800/10000 | train_ema= 242.463 | lr=7.77e-05
+  [D_bell2_32] Step  5900/10000 | train_ema= 247.362 | lr=7.46e-05
+  [D_bell2_32] Step  6000/10000 | train_ema= 245.058 | val= 250.746 | lr=7.15e-05
+  [D_bell2_32] Step  6100/10000 | train_ema= 245.934 | lr=6.85e-05
+  [D_bell2_32] Step  6200/10000 | train_ema= 259.861 | lr=6.55e-05
+  [D_bell2_32] Step  6250/10000 | train_ema= 242.075 | val= 250.112 | lr=6.40e-05
+  [D_bell2_32] Step  6300/10000 | train_ema= 248.397 | lr=6.25e-05
+  [D_bell2_32] Step  6400/10000 | train_ema= 247.814 | lr=5.95e-05
+  [D_bell2_32] Step  6500/10000 | train_ema= 246.627 | val= 249.536 | lr=5.66e-05
+  [D_bell2_32] Step  6600/10000 | train_ema= 245.031 | lr=5.37e-05
+  [D_bell2_32] Step  6700/10000 | train_ema= 255.262 | lr=5.09e-05
+  [D_bell2_32] Step  6750/10000 | train_ema= 241.417 | val= 249.307 | lr=4.95e-05
+  [D_bell2_32] Step  6800/10000 | train_ema= 239.077 | lr=4.82e-05
+  [D_bell2_32] Step  6900/10000 | train_ema= 244.886 | lr=4.54e-05
+  [D_bell2_32] Step  7000/10000 | train_ema= 244.375 | val= 248.880 | lr=4.28e-05
+  [D_bell2_32] Step  7100/10000 | train_ema= 253.363 | lr=4.02e-05
+  [D_bell2_32] Step  7200/10000 | train_ema= 260.239 | lr=3.77e-05
+  [D_bell2_32] Step  7250/10000 | train_ema= 250.676 | val= 248.255 | lr=3.64e-05
+  [D_bell2_32] Step  7300/10000 | train_ema= 236.769 | lr=3.52e-05
+  [D_bell2_32] Step  7400/10000 | train_ema= 241.466 | lr=3.28e-05
+  [D_bell2_32] Step  7500/10000 | train_ema= 249.797 | val= 248.039 | lr=3.04e-05
+  [D_bell2_32] Step  7600/10000 | train_ema= 238.894 | lr=2.82e-05
+  [D_bell2_32] Step  7700/10000 | train_ema= 241.515 | lr=2.60e-05
+  [D_bell2_32] Step  7750/10000 | train_ema= 239.990 | val= 247.865 | lr=2.49e-05
+  [D_bell2_32] Step  7800/10000 | train_ema= 247.099 | lr=2.39e-05
+  [D_bell2_32] Step  7900/10000 | train_ema= 236.267 | lr=2.18e-05
+  [D_bell2_32] Step  8000/10000 | train_ema= 250.120 | val= 247.503 | lr=1.99e-05
+  [D_bell2_32] Step  8100/10000 | train_ema= 242.412 | lr=1.80e-05
+  [D_bell2_32] Step  8200/10000 | train_ema= 249.601 | lr=1.62e-05
+  [D_bell2_32] Step  8250/10000 | train_ema= 243.178 | val= 247.143 | lr=1.53e-05
+  [D_bell2_32] Step  8300/10000 | train_ema= 245.364 | lr=1.45e-05
+  [D_bell2_32] Step  8400/10000 | train_ema= 264.035 | lr=1.29e-05
+  [D_bell2_32] Step  8500/10000 | train_ema= 244.545 | val= 247.063 | lr=1.13e-05
+  [D_bell2_32] Step  8600/10000 | train_ema= 245.424 | lr=9.90e-06
+  [D_bell2_32] Step  8700/10000 | train_ema= 263.902 | lr=8.56e-06
+  [D_bell2_32] Step  8750/10000 | train_ema= 243.826 | val= 246.897 | lr=7.92e-06
+  [D_bell2_32] Step  8800/10000 | train_ema= 242.225 | lr=7.31e-06
+  [D_bell2_32] Step  8900/10000 | train_ema= 242.352 | lr=6.15e-06
+  [D_bell2_32] Step  9000/10000 | train_ema= 240.730 | val= 246.793 | lr=5.09e-06
+  [D_bell2_32] Step  9100/10000 | train_ema= 240.256 | lr=4.13e-06
+  [D_bell2_32] Step  9200/10000 | train_ema= 245.470 | lr=3.27e-06
+  [D_bell2_32] Step  9250/10000 | train_ema= 243.117 | val= 246.714 | lr=2.88e-06
+  [D_bell2_32] Step  9300/10000 | train_ema= 245.903 | lr=2.51e-06
+  [D_bell2_32] Step  9400/10000 | train_ema= 242.440 | lr=1.84e-06
+  [D_bell2_32] Step  9500/10000 | train_ema= 247.809 | val= 246.684 | lr=1.28e-06
+  [D_bell2_32] Step  9600/10000 | train_ema= 249.252 | lr=8.21e-07
+  [D_bell2_32] Step  9700/10000 | train_ema= 246.120 | lr=4.62e-07
+  [D_bell2_32] Step  9750/10000 | train_ema= 243.521 | val= 246.665 | lr=3.21e-07
+  [D_bell2_32] Step  9800/10000 | train_ema= 247.478 | lr=2.05e-07
+  [D_bell2_32] Step  9900/10000 | train_ema= 247.848 | lr=5.14e-08
+  [D_bell2_32] Step 10000/10000 | train_ema= 245.078 | val= 246.665 | lr=0.00e+00
+  Learned γ and α per Mamba layer:
+    layer  1: γ=-0.113  →  α=0.472
+    layer  2: γ=-0.309  →  α=0.423
+    layer  3: γ=-0.299  →  α=0.426
+    layer  4: γ=-0.257  →  α=0.436
+    layer  5: γ=-0.196  →  α=0.451
+    layer  6: γ=-0.258  →  α=0.436
+    layer  7: γ=-0.175  →  α=0.456
+    layer  8: γ=-0.211  →  α=0.448
+    layer 10: γ=-0.127  →  α=0.468
+    layer 11: γ=-0.175  →  α=0.456
+    layer 12: γ=-0.121  →  α=0.470
+    layer 13: γ=-0.179  →  α=0.455
+    layer 14: γ=-0.170  →  α=0.458
+    layer 15: γ=-0.046  →  α=0.489
+    layer 16: γ=-0.121  →  α=0.470
+    layer 17: γ=-0.216  →  α=0.446
+    layer 19: γ=-0.236  →  α=0.441
+    layer 20: γ=-0.044  →  α=0.489
+    layer 21: γ=-0.222  →  α=0.445
+    layer 22: γ=-0.033  →  α=0.492
+    layer 23: γ=-0.046  →  α=0.489
+    layer 24: γ=+0.038  →  α=0.510
+    layer 25: γ=+0.008  →  α=0.502
+    layer 26: γ=-0.022  →  α=0.495
+
+========================================================================
+EXPERIMENT RESULTS  (validation loss — lower is better)
+========================================================================
+Var  d_state schedule                    Val@0  Val@mid  Val@end     vs A
+------------------------------------------------------------------------
+D_bell2_32 Per-span bell asymmetric (64→3     991.19   253.21   246.66      N/A
+========================================================================
+
+Step 4 complete.
+
+Device: cuda
+GPU:    NVIDIA A100-SXM4-80GB
+VRAM:   85.1 GB
+AMP dtype: bfloat16  |  GradScaler: no (bfloat16)
+LR: 5e-05 × batch_size 4 → effective LR 2.00e-04
+
+Variants: ['B_gated']  |  Steps each: 10000  |  Grad accum: 1  |  Val every: 250
+
+Loading teacher: Qwen/Qwen2.5-7B (bfloat16)...
+Loading weights: 100% 339/339 [00:00<00:00, 5737.76it/s]
+Teacher loaded.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Pre-tokenising data (train=40500, val=100, seq_len=1024)...
+  Loaded 40500 train chunks, 100 val chunks.
+
+============================================================
+Variant B_gated: Uniform (d=64) + constant gate
+============================================================
+Loading weights: 100% 338/338 [00:00<00:00, 796.71it/s]
+  Attn layers: [0, 9, 18, 27]  (4 attn, 24 Mamba) | d_state: 64→64
+  Trainable params: 350,514,456 / 1,762,059,032
+  [B_gated] Step 0 — initial val loss...
+  [B_gated] Step    0/10000 | val=998.4298  (pre-training)
+  [B_gated] Step     1/10000 | train_ema=1015.329 | lr=2.00e-06
+  [B_gated] Step   100/10000 | train_ema= 341.489 | lr=1.01e-04
+  [B_gated] Step   200/10000 | train_ema= 307.755 | lr=2.00e-04
+  [B_gated] Step   250/10000 | train_ema= 299.334 | val= 302.993 | lr=2.00e-04
+  [B_gated] Step   300/10000 | train_ema= 297.940 | lr=2.00e-04
+  [B_gated] Step   400/10000 | train_ema= 294.116 | lr=2.00e-04
+  [B_gated] Step   500/10000 | train_ema= 287.184 | val= 296.625 | lr=2.00e-04
+  [B_gated] Step   600/10000 | train_ema= 282.132 | lr=1.99e-04
+  [B_gated] Step   700/10000 | train_ema= 288.933 | lr=1.99e-04
+  [B_gated] Step   750/10000 | train_ema= 281.376 | val= 282.785 | lr=1.98e-04
+  [B_gated] Step   800/10000 | train_ema= 287.480 | lr=1.98e-04
+  [B_gated] Step   900/10000 | train_ema= 271.680 | lr=1.97e-04
+  [B_gated] Step  1000/10000 | train_ema= 280.044 | val= 275.737 | lr=1.97e-04
+  [B_gated] Step  1100/10000 | train_ema= 272.817 | lr=1.96e-04
+  [B_gated] Step  1200/10000 | train_ema= 262.873 | lr=1.95e-04
+  [B_gated] Step  1250/10000 | train_ema= 259.016 | val= 271.721 | lr=1.94e-04
+  [B_gated] Step  1300/10000 | train_ema= 266.780 | lr=1.94e-04
+  [B_gated] Step  1400/10000 | train_ema= 265.878 | lr=1.93e-04
+  [B_gated] Step  1500/10000 | train_ema= 269.044 | val= 271.325 | lr=1.91e-04
+  [B_gated] Step  1600/10000 | train_ema= 271.670 | lr=1.90e-04
+  [B_gated] Step  1700/10000 | train_ema= 270.110 | lr=1.89e-04
+  [B_gated] Step  1750/10000 | train_ema= 266.933 | val= 267.836 | lr=1.88e-04
+  [B_gated] Step  1800/10000 | train_ema= 276.278 | lr=1.87e-04
+  [B_gated] Step  1900/10000 | train_ema= 257.194 | lr=1.86e-04
+  [B_gated] Step  2000/10000 | train_ema= 263.634 | val= 265.593 | lr=1.84e-04
+  [B_gated] Step  2100/10000 | train_ema= 259.181 | lr=1.82e-04
+  [B_gated] Step  2200/10000 | train_ema= 263.835 | lr=1.80e-04
+  [B_gated] Step  2250/10000 | train_ema= 260.668 | val= 263.214 | lr=1.79e-04
+  [B_gated] Step  2300/10000 | train_ema= 273.413 | lr=1.78e-04
+  [B_gated] Step  2400/10000 | train_ema= 259.425 | lr=1.76e-04
+  [B_gated] Step  2500/10000 | train_ema= 255.696 | val= 262.219 | lr=1.74e-04
+  [B_gated] Step  2600/10000 | train_ema= 261.451 | lr=1.72e-04
+  [B_gated] Step  2700/10000 | train_ema= 258.011 | lr=1.70e-04
+  [B_gated] Step  2750/10000 | train_ema= 255.028 | val= 260.361 | lr=1.68e-04
+  [B_gated] Step  2800/10000 | train_ema= 258.371 | lr=1.67e-04
+  [B_gated] Step  2900/10000 | train_ema= 249.109 | lr=1.65e-04
+  [B_gated] Step  3000/10000 | train_ema= 252.816 | val= 259.687 | lr=1.62e-04
+  [B_gated] Step  3100/10000 | train_ema= 263.935 | lr=1.60e-04
+  [B_gated] Step  3200/10000 | train_ema= 251.953 | lr=1.57e-04
+  [B_gated] Step  3250/10000 | train_ema= 273.901 | val= 259.414 | lr=1.56e-04
+  [B_gated] Step  3300/10000 | train_ema= 263.342 | lr=1.55e-04
+  [B_gated] Step  3400/10000 | train_ema= 252.701 | lr=1.52e-04
+  [B_gated] Step  3500/10000 | train_ema= 250.643 | val= 256.941 | lr=1.49e-04
+  [B_gated] Step  3600/10000 | train_ema= 252.545 | lr=1.46e-04
+  [B_gated] Step  3700/10000 | train_ema= 252.456 | lr=1.43e-04
+  [B_gated] Step  3750/10000 | train_ema= 248.280 | val= 256.683 | lr=1.42e-04
+  [B_gated] Step  3800/10000 | train_ema= 254.102 | lr=1.40e-04
+  [B_gated] Step  3900/10000 | train_ema= 253.507 | lr=1.38e-04
+  [B_gated] Step  4000/10000 | train_ema= 255.220 | val= 255.489 | lr=1.35e-04
+  [B_gated] Step  4100/10000 | train_ema= 252.134 | lr=1.32e-04
+  [B_gated] Step  4200/10000 | train_ema= 250.096 | lr=1.28e-04
+  [B_gated] Step  4250/10000 | train_ema= 254.983 | val= 254.694 | lr=1.27e-04
+  [B_gated] Step  4300/10000 | train_ema= 254.763 | lr=1.25e-04
+  [B_gated] Step  4400/10000 | train_ema= 250.205 | lr=1.22e-04
+  [B_gated] Step  4500/10000 | train_ema= 258.383 | val= 253.910 | lr=1.19e-04
+  [B_gated] Step  4600/10000 | train_ema= 247.620 | lr=1.16e-04
+  [B_gated] Step  4700/10000 | train_ema= 249.639 | lr=1.13e-04
+  [B_gated] Step  4750/10000 | train_ema= 242.505 | val= 253.568 | lr=1.11e-04
+  [B_gated] Step  4800/10000 | train_ema= 261.891 | lr=1.10e-04
+  [B_gated] Step  4900/10000 | train_ema= 248.640 | lr=1.06e-04
+  [B_gated] Step  5000/10000 | train_ema= 257.728 | val= 253.629 | lr=1.03e-04
+  [B_gated] Step  5100/10000 | train_ema= 245.591 | lr=1.00e-04
+  [B_gated] Step  5200/10000 | train_ema= 247.624 | lr=9.68e-05
+  [B_gated] Step  5250/10000 | train_ema= 251.736 | val= 252.053 | lr=9.52e-05
+  [B_gated] Step  5300/10000 | train_ema= 246.476 | lr=9.36e-05
+  [B_gated] Step  5400/10000 | train_ema= 262.936 | lr=9.04e-05
+  [B_gated] Step  5500/10000 | train_ema= 253.226 | val= 251.589 | lr=8.72e-05
+  [B_gated] Step  5600/10000 | train_ema= 250.515 | lr=8.40e-05
+  [B_gated] Step  5700/10000 | train_ema= 247.301 | lr=8.09e-05
+  [B_gated] Step  5750/10000 | train_ema= 246.891 | val= 251.134 | lr=7.93e-05
+  [B_gated] Step  5800/10000 | train_ema= 242.670 | lr=7.77e-05
+  [B_gated] Step  5900/10000 | train_ema= 247.569 | lr=7.46e-05
+  [B_gated] Step  6000/10000 | train_ema= 245.175 | val= 250.646 | lr=7.15e-05
+  [B_gated] Step  6100/10000 | train_ema= 246.004 | lr=6.85e-05
+  [B_gated] Step  6200/10000 | train_ema= 260.000 | lr=6.55e-05
+  [B_gated] Step  6250/10000 | train_ema= 242.171 | val= 250.118 | lr=6.40e-05
+  [B_gated] Step  6300/10000 | train_ema= 248.348 | lr=6.25e-05
+  [B_gated] Step  6400/10000 | train_ema= 247.965 | lr=5.95e-05
+  [B_gated] Step  6500/10000 | train_ema= 246.879 | val= 249.494 | lr=5.66e-05
+  [B_gated] Step  6600/10000 | train_ema= 245.085 | lr=5.37e-05
+  [B_gated] Step  6700/10000 | train_ema= 255.372 | lr=5.09e-05
+  [B_gated] Step  6750/10000 | train_ema= 241.476 | val= 249.280 | lr=4.95e-05
+  [B_gated] Step  6800/10000 | train_ema= 239.148 | lr=4.82e-05
+  [B_gated] Step  6900/10000 | train_ema= 244.993 | lr=4.54e-05
+  [B_gated] Step  7000/10000 | train_ema= 244.484 | val= 248.904 | lr=4.28e-05
+  [B_gated] Step  7100/10000 | train_ema= 253.491 | lr=4.02e-05
+  [B_gated] Step  7200/10000 | train_ema= 260.352 | lr=3.77e-05
+  [B_gated] Step  7250/10000 | train_ema= 250.850 | val= 248.361 | lr=3.64e-05
+  [B_gated] Step  7300/10000 | train_ema= 236.862 | lr=3.52e-05
+  [B_gated] Step  7400/10000 | train_ema= 241.525 | lr=3.28e-05
+  [B_gated] Step  7500/10000 | train_ema= 249.879 | val= 248.132 | lr=3.04e-05
+  [B_gated] Step  7600/10000 | train_ema= 238.946 | lr=2.82e-05
+  [B_gated] Step  7700/10000 | train_ema= 241.630 | lr=2.60e-05
+  [B_gated] Step  7750/10000 | train_ema= 240.085 | val= 247.899 | lr=2.49e-05
+  [B_gated] Step  7800/10000 | train_ema= 247.154 | lr=2.39e-05
+  [B_gated] Step  7900/10000 | train_ema= 236.307 | lr=2.18e-05
+  [B_gated] Step  8000/10000 | train_ema= 250.170 | val= 247.494 | lr=1.99e-05
+  [B_gated] Step  8100/10000 | train_ema= 242.521 | lr=1.80e-05
+  [B_gated] Step  8200/10000 | train_ema= 249.704 | lr=1.62e-05
+  [B_gated] Step  8250/10000 | train_ema= 243.293 | val= 247.053 | lr=1.53e-05
+  [B_gated] Step  8300/10000 | train_ema= 245.473 | lr=1.45e-05
+  [B_gated] Step  8400/10000 | train_ema= 264.123 | lr=1.29e-05
+  [B_gated] Step  8500/10000 | train_ema= 244.688 | val= 246.979 | lr=1.13e-05
+  [B_gated] Step  8600/10000 | train_ema= 245.549 | lr=9.90e-06
+  [B_gated] Step  8700/10000 | train_ema= 264.039 | lr=8.56e-06
+  [B_gated] Step  8750/10000 | train_ema= 243.908 | val= 246.865 | lr=7.92e-06
+  [B_gated] Step  8800/10000 | train_ema= 242.275 | lr=7.31e-06
+  [B_gated] Step  8900/10000 | train_ema= 242.466 | lr=6.15e-06
+  [B_gated] Step  9000/10000 | train_ema= 240.853 | val= 246.761 | lr=5.09e-06
+  [B_gated] Step  9100/10000 | train_ema= 240.293 | lr=4.13e-06
+  [B_gated] Step  9200/10000 | train_ema= 245.554 | lr=3.27e-06
+  [B_gated] Step  9250/10000 | train_ema= 243.141 | val= 246.702 | lr=2.88e-06
+  [B_gated] Step  9300/10000 | train_ema= 245.947 | lr=2.51e-06
+  [B_gated] Step  9400/10000 | train_ema= 242.585 | lr=1.84e-06
+  [B_gated] Step  9500/10000 | train_ema= 247.820 | val= 246.677 | lr=1.28e-06
+  [B_gated] Step  9600/10000 | train_ema= 249.407 | lr=8.21e-07
+  [B_gated] Step  9700/10000 | train_ema= 246.187 | lr=4.62e-07
+  [B_gated] Step  9750/10000 | train_ema= 243.643 | val= 246.648 | lr=3.21e-07
+  [B_gated] Step  9800/10000 | train_ema= 247.515 | lr=2.05e-07
+  [B_gated] Step  9900/10000 | train_ema= 247.948 | lr=5.14e-08
+  [B_gated] Step 10000/10000 | train_ema= 245.199 | val= 246.644 | lr=0.00e+00
+  Learned γ and α per Mamba layer:
+    layer  1: γ=-0.114  →  α=0.471
+    layer  2: γ=-0.282  →  α=0.430
+    layer  3: γ=-0.259  →  α=0.436
+    layer  4: γ=-0.326  →  α=0.419
+    layer  5: γ=-0.208  →  α=0.448
+    layer  6: γ=-0.314  →  α=0.422
+    layer  7: γ=-0.195  →  α=0.452
+    layer  8: γ=-0.215  →  α=0.446
+    layer 10: γ=-0.130  →  α=0.467
+    layer 11: γ=-0.218  →  α=0.446
+    layer 12: γ=-0.212  →  α=0.447
+    layer 13: γ=-0.173  →  α=0.457
+    layer 14: γ=-0.168  →  α=0.458
+    layer 15: γ=-0.051  →  α=0.487
+    layer 16: γ=-0.262  →  α=0.435
+    layer 17: γ=-0.209  →  α=0.448
+    layer 19: γ=-0.229  →  α=0.443
+    layer 20: γ=-0.102  →  α=0.474
+    layer 21: γ=-0.172  →  α=0.457
+    layer 22: γ=-0.027  →  α=0.493
+    layer 23: γ=-0.050  →  α=0.487
+    layer 24: γ=+0.002  →  α=0.501
+    layer 25: γ=+0.012  →  α=0.503
+    layer 26: γ=-0.018  →  α=0.495
+
+========================================================================
+EXPERIMENT RESULTS  (validation loss — lower is better)
+========================================================================
+Var  d_state schedule                    Val@0  Val@mid  Val@end     vs A
+------------------------------------------------------------------------
+B_gated Uniform (d=64) + constant gate     998.43   253.63   246.64      N/A
+========================================================================
+
+Step 4 complete.
+
+
+Device: cuda
+GPU:    NVIDIA A100-SXM4-80GB
+VRAM:   85.1 GB
+AMP dtype: bfloat16  |  GradScaler: no (bfloat16)
+LR: 5e-05 × batch_size 4 → effective LR 2.00e-04
+
+Variants: ['D_bell2']  |  Steps each: 10000  |  Grad accum: 1  |  Val every: 250
+
+Loading teacher: Qwen/Qwen2.5-7B (bfloat16)...
+Loading weights: 100% 339/339 [00:00<00:00, 6281.03it/s]
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Teacher loaded.
+Pre-tokenising data (train=40500, val=100, seq_len=1024)...
+  Loaded 40500 train chunks, 100 val chunks.
+
+============================================================
+Variant D_bell2: Per-span bell (64→32→64 each span) + constant gate
+============================================================
+Loading weights: 100% 338/338 [00:00<00:00, 787.20it/s]
+  Attn layers: [0, 9, 18, 27]  (4 attn, 24 Mamba) | d_state: 64→64
+  Trainable params: 349,490,904 / 1,761,035,480
+  [D_bell2] Step 0 — initial val loss...
+  [D_bell2] Step    0/10000 | val=1010.0095  (pre-training)
+  [D_bell2] Step     1/10000 | train_ema=1040.917 | lr=2.00e-06
+  [D_bell2] Step   100/10000 | train_ema= 339.916 | lr=1.01e-04
+  [D_bell2] Step   200/10000 | train_ema= 302.465 | lr=2.00e-04
+  [D_bell2] Step   250/10000 | train_ema= 296.756 | val= 298.826 | lr=2.00e-04
+  [D_bell2] Step   300/10000 | train_ema= 296.808 | lr=2.00e-04
+  [D_bell2] Step   400/10000 | train_ema= 293.124 | lr=2.00e-04
+  [D_bell2] Step   500/10000 | train_ema= 286.441 | val= 295.414 | lr=2.00e-04
+  [D_bell2] Step   600/10000 | train_ema= 281.680 | lr=1.99e-04
+  [D_bell2] Step   700/10000 | train_ema= 288.071 | lr=1.99e-04
+  [D_bell2] Step   750/10000 | train_ema= 280.368 | val= 281.578 | lr=1.98e-04
+  [D_bell2] Step   800/10000 | train_ema= 286.476 | lr=1.98e-04
+  [D_bell2] Step   900/10000 | train_ema= 270.964 | lr=1.97e-04
+  [D_bell2] Step  1000/10000 | train_ema= 279.469 | val= 275.147 | lr=1.97e-04
+  [D_bell2] Step  1100/10000 | train_ema= 272.184 | lr=1.96e-04
+  [D_bell2] Step  1200/10000 | train_ema= 262.156 | lr=1.95e-04
+  [D_bell2] Step  1250/10000 | train_ema= 258.444 | val= 271.213 | lr=1.94e-04
+  [D_bell2] Step  1300/10000 | train_ema= 266.246 | lr=1.94e-04
+  [D_bell2] Step  1400/10000 | train_ema= 265.532 | lr=1.93e-04
+  [D_bell2] Step  1500/10000 | train_ema= 268.152 | val= 271.572 | lr=1.91e-04
+  [D_bell2] Step  1600/10000 | train_ema= 270.904 | lr=1.90e-04
+  [D_bell2] Step  1700/10000 | train_ema= 269.859 | lr=1.89e-04
+  [D_bell2] Step  1750/10000 | train_ema= 266.643 | val= 266.905 | lr=1.88e-04
+  [D_bell2] Step  1800/10000 | train_ema= 275.983 | lr=1.87e-04
+  [D_bell2] Step  1900/10000 | train_ema= 256.748 | lr=1.86e-04
+  [D_bell2] Step  2000/10000 | train_ema= 263.238 | val= 265.522 | lr=1.84e-04
+  [D_bell2] Step  2100/10000 | train_ema= 259.165 | lr=1.82e-04
+  [D_bell2] Step  2200/10000 | train_ema= 263.481 | lr=1.80e-04
+  [D_bell2] Step  2250/10000 | train_ema= 260.531 | val= 263.649 | lr=1.79e-04
+  [D_bell2] Step  2300/10000 | train_ema= 273.208 | lr=1.78e-04
+  [D_bell2] Step  2400/10000 | train_ema= 259.407 | lr=1.76e-04
+  [D_bell2] Step  2500/10000 | train_ema= 255.506 | val= 262.214 | lr=1.74e-04
+  [D_bell2] Step  2600/10000 | train_ema= 261.298 | lr=1.72e-04
+  [D_bell2] Step  2700/10000 | train_ema= 258.015 | lr=1.70e-04
+  [D_bell2] Step  2750/10000 | train_ema= 254.869 | val= 260.316 | lr=1.68e-04
+  [D_bell2] Step  2800/10000 | train_ema= 257.802 | lr=1.67e-04
+  [D_bell2] Step  2900/10000 | train_ema= 248.713 | lr=1.65e-04
+  [D_bell2] Step  3000/10000 | train_ema= 252.731 | val= 259.633 | lr=1.62e-04
+  [D_bell2] Step  3100/10000 | train_ema= 263.668 | lr=1.60e-04
+  [D_bell2] Step  3200/10000 | train_ema= 251.627 | lr=1.57e-04
+  [D_bell2] Step  3250/10000 | train_ema= 273.757 | val= 259.155 | lr=1.56e-04
+  [D_bell2] Step  3300/10000 | train_ema= 263.085 | lr=1.55e-04
+  [D_bell2] Step  3400/10000 | train_ema= 252.271 | lr=1.52e-04
+  [D_bell2] Step  3500/10000 | train_ema= 250.404 | val= 256.513 | lr=1.49e-04
+  [D_bell2] Step  3600/10000 | train_ema= 252.372 | lr=1.46e-04
+  [D_bell2] Step  3700/10000 | train_ema= 252.193 | lr=1.43e-04
+  [D_bell2] Step  3750/10000 | train_ema= 248.001 | val= 255.992 | lr=1.42e-04
+  [D_bell2] Step  3800/10000 | train_ema= 253.818 | lr=1.40e-04
+  [D_bell2] Step  3900/10000 | train_ema= 253.236 | lr=1.38e-04
+  [D_bell2] Step  4000/10000 | train_ema= 254.971 | val= 255.028 | lr=1.35e-04
+  [D_bell2] Step  4100/10000 | train_ema= 251.910 | lr=1.32e-04
+  [D_bell2] Step  4200/10000 | train_ema= 249.942 | lr=1.28e-04
+  [D_bell2] Step  4250/10000 | train_ema= 254.819 | val= 254.413 | lr=1.27e-04
+  [D_bell2] Step  4300/10000 | train_ema= 254.360 | lr=1.25e-04
+  [D_bell2] Step  4400/10000 | train_ema= 250.108 | lr=1.22e-04
+  [D_bell2] Step  4500/10000 | train_ema= 258.318 | val= 253.676 | lr=1.19e-04
+  [D_bell2] Step  4600/10000 | train_ema= 247.611 | lr=1.16e-04
+  [D_bell2] Step  4700/10000 | train_ema= 249.463 | lr=1.13e-04
+  [D_bell2] Step  4750/10000 | train_ema= 242.515 | val= 253.358 | lr=1.11e-04
+  [D_bell2] Step  4800/10000 | train_ema= 261.989 | lr=1.10e-04
+  [D_bell2] Step  4900/10000 | train_ema= 248.674 | lr=1.06e-04
+  [D_bell2] Step  5000/10000 | train_ema= 257.848 | val= 253.524 | lr=1.03e-04
+  [D_bell2] Step  5100/10000 | train_ema= 245.439 | lr=1.00e-04
+  [D_bell2] Step  5200/10000 | train_ema= 247.475 | lr=9.68e-05
+  [D_bell2] Step  5250/10000 | train_ema= 251.640 | val= 251.995 | lr=9.52e-05
+  [D_bell2] Step  5300/10000 | train_ema= 246.416 | lr=9.36e-05
+  [D_bell2] Step  5400/10000 | train_ema= 262.886 | lr=9.04e-05
+  [D_bell2] Step  5500/10000 | train_ema= 253.044 | val= 251.556 | lr=8.72e-05
+  [D_bell2] Step  5600/10000 | train_ema= 250.475 | lr=8.40e-05
+  [D_bell2] Step  5700/10000 | train_ema= 247.235 | lr=8.09e-05
+  [D_bell2] Step  5750/10000 | train_ema= 246.814 | val= 251.065 | lr=7.93e-05
+  [D_bell2] Step  5800/10000 | train_ema= 242.609 | lr=7.77e-05
+  [D_bell2] Step  5900/10000 | train_ema= 247.513 | lr=7.46e-05
+  [D_bell2] Step  6000/10000 | train_ema= 245.143 | val= 250.663 | lr=7.15e-05
+  [D_bell2] Step  6100/10000 | train_ema= 245.982 | lr=6.85e-05
+  [D_bell2] Step  6200/10000 | train_ema= 259.879 | lr=6.55e-05
+  [D_bell2] Step  6250/10000 | train_ema= 242.158 | val= 250.102 | lr=6.40e-05
+  [D_bell2] Step  6300/10000 | train_ema= 248.345 | lr=6.25e-05
+  [D_bell2] Step  6400/10000 | train_ema= 247.910 | lr=5.95e-05
+  [D_bell2] Step  6500/10000 | train_ema= 246.797 | val= 249.476 | lr=5.66e-05
+  [D_bell2] Step  6600/10000 | train_ema= 245.023 | lr=5.37e-05
+  [D_bell2] Step  6700/10000 | train_ema= 255.361 | lr=5.09e-05
+  [D_bell2] Step  6750/10000 | train_ema= 241.493 | val= 249.354 | lr=4.95e-05
+  [D_bell2] Step  6800/10000 | train_ema= 239.135 | lr=4.82e-05
+  [D_bell2] Step  6900/10000 | train_ema= 244.955 | lr=4.54e-05
+  [D_bell2] Step  7000/10000 | train_ema= 244.493 | val= 248.958 | lr=4.28e-05
+  [D_bell2] Step  7100/10000 | train_ema= 253.554 | lr=4.02e-05
+  [D_bell2] Step  7200/10000 | train_ema= 260.316 | lr=3.77e-05
+  [D_bell2] Step  7250/10000 | train_ema= 250.812 | val= 248.340 | lr=3.64e-05
+  [D_bell2] Step  7300/10000 | train_ema= 236.888 | lr=3.52e-05
+  [D_bell2] Step  7400/10000 | train_ema= 241.604 | lr=3.28e-05
+  [D_bell2] Step  7500/10000 | train_ema= 249.931 | val= 248.114 | lr=3.04e-05
+  [D_bell2] Step  7600/10000 | train_ema= 238.978 | lr=2.82e-05
+  [D_bell2] Step  7700/10000 | train_ema= 241.646 | lr=2.60e-05
+  [D_bell2] Step  7750/10000 | train_ema= 240.148 | val= 247.928 | lr=2.49e-05
+  [D_bell2] Step  7800/10000 | train_ema= 247.209 | lr=2.39e-05
+  [D_bell2] Step  7900/10000 | train_ema= 236.418 | lr=2.18e-05
+  [D_bell2] Step  8000/10000 | train_ema= 250.113 | val= 247.525 | lr=1.99e-05
+  [D_bell2] Step  8100/10000 | train_ema= 242.489 | lr=1.80e-05
+  [D_bell2] Step  8200/10000 | train_ema= 249.649 | lr=1.62e-05
+  [D_bell2] Step  8250/10000 | train_ema= 243.274 | val= 247.168 | lr=1.53e-05
+  [D_bell2] Step  8300/10000 | train_ema= 245.437 | lr=1.45e-05
+  [D_bell2] Step  8400/10000 | train_ema= 264.045 | lr=1.29e-05
+  [D_bell2] Step  8500/10000 | train_ema= 244.623 | val= 247.080 | lr=1.13e-05
+  [D_bell2] Step  8600/10000 | train_ema= 245.487 | lr=9.90e-06
+  [D_bell2] Step  8700/10000 | train_ema= 264.023 | lr=8.56e-06
+  [D_bell2] Step  8750/10000 | train_ema= 243.919 | val= 246.949 | lr=7.92e-06
+  [D_bell2] Step  8800/10000 | train_ema= 242.283 | lr=7.31e-06
+  [D_bell2] Step  8900/10000 | train_ema= 242.460 | lr=6.15e-06
+  [D_bell2] Step  9000/10000 | train_ema= 240.798 | val= 246.819 | lr=5.09e-06
+  [D_bell2] Step  9100/10000 | train_ema= 240.278 | lr=4.13e-06
+  [D_bell2] Step  9200/10000 | train_ema= 245.554 | lr=3.27e-06
+  [D_bell2] Step  9250/10000 | train_ema= 243.128 | val= 246.770 | lr=2.88e-06
+  [D_bell2] Step  9300/10000 | train_ema= 245.951 | lr=2.51e-06
+  [D_bell2] Step  9400/10000 | train_ema= 242.613 | lr=1.84e-06
+  [D_bell2] Step  9500/10000 | train_ema= 247.866 | val= 246.739 | lr=1.28e-06
+  [D_bell2] Step  9600/10000 | train_ema= 249.339 | lr=8.21e-07
+  [D_bell2] Step  9700/10000 | train_ema= 246.246 | lr=4.62e-07
+  [D_bell2] Step  9750/10000 | train_ema= 243.672 | val= 246.716 | lr=3.21e-07
+  [D_bell2] Step  9800/10000 | train_ema= 247.565 | lr=2.05e-07
+  [D_bell2] Step  9900/10000 | train_ema= 247.947 | lr=5.14e-08
+  [D_bell2] Step 10000/10000 | train_ema= 245.198 | val= 246.715 | lr=0.00e+00
+  Learned γ and α per Mamba layer:
+    layer  1: γ=-0.104  →  α=0.474
+    layer  2: γ=-0.275  →  α=0.432
+    layer  3: γ=-0.236  →  α=0.441
+    layer  4: γ=-0.298  →  α=0.426
+    layer  5: γ=-0.194  →  α=0.452
+    layer  6: γ=-0.300  →  α=0.426
+    layer  7: γ=-0.206  →  α=0.449
+    layer  8: γ=-0.219  →  α=0.446
+    layer 10: γ=-0.185  →  α=0.454
+    layer 11: γ=-0.215  →  α=0.446
+    layer 12: γ=-0.129  →  α=0.468
+    layer 13: γ=-0.265  →  α=0.434
+    layer 14: γ=-0.142  →  α=0.465
+    layer 15: γ=-0.055  →  α=0.486
+    layer 16: γ=-0.146  →  α=0.464
+    layer 17: γ=-0.152  →  α=0.462
+    layer 19: γ=-0.239  →  α=0.441
+    layer 20: γ=-0.138  →  α=0.465
+    layer 21: γ=-0.169  →  α=0.458
+    layer 22: γ=-0.074  →  α=0.481
+    layer 23: γ=-0.029  →  α=0.493
+    layer 24: γ=+0.055  →  α=0.514
+    layer 25: γ=+0.023  →  α=0.506
+    layer 26: γ=-0.017  →  α=0.496
+
+========================================================================
+EXPERIMENT RESULTS  (validation loss — lower is better)
+========================================================================
+Var  d_state schedule                    Val@0  Val@mid  Val@end     vs A
+------------------------------------------------------------------------
+D_bell2 Per-span bell (64→32→64 each s    1010.01   253.52   246.71      N/A
+========================================================================
+
+Step 4 complete.

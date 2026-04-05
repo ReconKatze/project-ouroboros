@@ -253,6 +253,51 @@ def distill_loss(student_logits, teacher_logits, T=2.0):
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint helpers
+# ---------------------------------------------------------------------------
+
+def save_checkpoint(path, name, step, student, optimizer, scheduler,
+                    val_log, ema_loss, chunk_idx):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    torch.save({
+        "variant":         name,
+        "step":            step,
+        "model_state":     student.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+        "val_log":         val_log,
+        "ema_loss":        ema_loss,
+        "chunk_idx":       chunk_idx,
+    }, path)
+    print(f"  [{name}] Checkpoint saved → {path}")
+
+
+def load_checkpoint(path, name, student, optimizer, scheduler, args):
+    """Load checkpoint. Returns (start_step, val_log, ema_loss, chunk_idx).
+
+    If the saved step equals args.steps the checkpoint is a *finished* run —
+    only model weights are restored (warm-start for Round 2). Otherwise full
+    state is restored so an interrupted run continues from where it left off.
+    """
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    student.load_state_dict(ckpt["model_state"])
+    saved_step = ckpt.get("step", 0)
+    if saved_step > 0 and saved_step < args.steps:
+        # Crash-recovery: restore full training state
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+        print(f"  [{name}] Resumed from step {saved_step}/{args.steps} (crash recovery)")
+        return (saved_step,
+                ckpt.get("val_log", {}),
+                ckpt.get("ema_loss", None),
+                ckpt.get("chunk_idx", 0))
+    else:
+        # Warm-start: model weights only, reset optimizer/scheduler/counters
+        print(f"  [{name}] Warm-started from '{path}' (model weights only)")
+        return 0, {}, None, 0
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
@@ -389,19 +434,35 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_schedule)
 
-    val_log   = {}   # {step: val_loss}
-    ema_loss  = None
-    ema_alpha = 0.95
-    chunk_idx = 0
+    val_log     = {}
+    ema_loss    = None
+    ema_alpha   = 0.95
+    chunk_idx   = 0
     accum_steps = 0
+    start_step  = 0
 
-    # Initial validation before any training
-    print(f"  [{name}] Step 0 — initial val loss...")
-    val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
-    val_log[0] = val_loss
-    print(f"  [{name}] Step    0/{args.steps} | val={val_loss:.4f}  (pre-training)")
+    # Resume from checkpoint if requested
+    if args.resume:
+        start_step, val_log, ema_loss, chunk_idx = load_checkpoint(
+            args.resume, name, student, optimizer, scheduler, args
+        )
+        # Replay LR scheduler to the correct position after a warm-start
+        for _ in range(start_step):
+            scheduler.step()
 
-    for step in range(1, args.steps + 1):
+    # Checkpoint output path (save_dir/<name>_final.pt and mid-run)
+    save_dir = args.save_dir
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
+    # Initial validation (skip if resuming mid-run — already have val_log)
+    if start_step == 0:
+        print(f"  [{name}] Step 0 — initial val loss...")
+        val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
+        val_log[0] = val_loss
+        print(f"  [{name}] Step    0/{args.steps} | val={val_loss:.4f}  (pre-training)")
+
+    for step in range(start_step + 1, args.steps + 1):
         batch_chunks = [
             train_chunks[(chunk_idx + i) % len(train_chunks)]
             for i in range(args.batch_size)
@@ -451,6 +512,12 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
         loss_val = loss.item()
         ema_loss = loss_val if ema_loss is None else ema_alpha * ema_loss + (1 - ema_alpha) * loss_val
 
+        # Mid-run checkpoint
+        if save_dir and args.checkpoint_every > 0 and step % args.checkpoint_every == 0:
+            ckpt_path = os.path.join(save_dir, f"{name}_step{step}.pt")
+            save_checkpoint(ckpt_path, name, step, student, optimizer, scheduler,
+                            val_log, ema_loss, chunk_idx)
+
         # Validation eval
         if step % args.eval_every == 0:
             val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
@@ -463,6 +530,12 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
             lr_now = scheduler.get_last_lr()[0]
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
                   f"train_ema={ema_loss:8.3f} | lr={lr_now:.2e}")
+
+    # Final checkpoint
+    if save_dir:
+        final_path = os.path.join(save_dir, f"{name}_final.pt")
+        save_checkpoint(final_path, name, args.steps, student, optimizer, scheduler,
+                        val_log, ema_loss, chunk_idx)
 
     # Final validation if not already done at last step
     if args.steps not in val_log:
@@ -525,6 +598,15 @@ def parse_args():
     p.add_argument("--attn-indices", default=None,
                    help="Comma-separated attention layer indices, e.g. '0,11,23' for 3-attention "
                         "variant. Default: model-type preset ({0,9,18,27} for Qwen2.5-1.5B).")
+    p.add_argument("--save-dir",        default="checkpoints",
+                   help="Directory to save checkpoints. Final: <name>_final.pt. "
+                        "Set to '' to disable saving.")
+    p.add_argument("--resume",          default=None,
+                   help="Path to checkpoint to load before training. If step < --steps, "
+                        "resumes full state (crash recovery). If step >= --steps, loads "
+                        "model weights only (warm-start for Round 2).")
+    p.add_argument("--checkpoint-every", type=int, default=2500,
+                   help="Save mid-run checkpoint every N steps (0 = final only).")
     return p.parse_args()
 
 

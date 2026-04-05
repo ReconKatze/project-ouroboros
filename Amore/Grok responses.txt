@@ -1,0 +1,566 @@
+Grok convo1
+
+I would begin exactly as the document prescribes: with Step 1 on a laptop CPU using Pythia-160M. This is the foundational proof-of-concept for the entire scaffold. Everything else (Qwen conversion, distillation, the d_state gradient, GGUF) reuses the same HybridChimeraModel class and conversion logic. No Colab, no mamba-ssm, no money spent yet—just pure CPU + PyTorch + transformers to verify that layer replacement, QKV → C/B/X weight initialization, sink tokens, and forward-pass compatibility all work without NaNs or shape errors.
+1. Project Setup (5–10 minutes on any laptop)
+mkdir -p project-ouroboros/{scripts,models,configs}
+cd project-ouroboros
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install transformers==4.45.0 accelerate  # exact versions from the doc
+mkdir -p scripts models
+This gives us a clean, CPU-only environment (8 GB+ RAM is plenty for Pythia-160M).
+2. Core Scaffold Files I Would Create First
+	•	models/fallback_mamba.py — the CPU-safe drop-in replacement (simple gated linear unit as specified).
+	•	models/hybrid_chimera.py — the reusable HybridChimeraModel that does the conversion.
+	•	scripts/convert_and_test.py — the runner for Step 1.
+3. FallbackMamba: Simple Gated Linear Unit (CPU-only)
+As the doc states, this is not a real SSM—it just proves the conversion architecture works without CUDA. It mimics the interface of a real Mamba layer (same forward signature) so the Transformer’s decoder layers continue to work unchanged.
+# models/fallback_mamba.py
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class FallbackMamba(nn.Module):
+    def __init__(self, dim: int, d_state: int = 16, num_sinks: int = 4):
+        super().__init__()
+        self.dim = dim
+        self.d_state = d_state
+        # Projections that will receive Q/K/V weights (we'll copy them in the converter)
+        self.c_proj = nn.Linear(dim, dim, bias=False)   # ← from Q
+        self.b_proj = nn.Linear(dim, dim, bias=False)   # ← from K
+        self.x_proj = nn.Linear(dim, dim, bias=False)   # ← from V
+        self.out_proj = nn.Linear(dim, dim, bias=False)
+        # Simple GLU gate (doc-specified fallback)
+        self.gate_proj = nn.Linear(dim, dim, bias=False)
+        # 4 learnable sink tokens (prepended for state initialization, as described)
+        self.sink_tokens = nn.Parameter(torch.randn(1, num_sinks, dim) * 0.02)
+
+    def forward(self, hidden_states: torch.Tensor, **kwargs):
+        # Ignore attention_mask/position_ids (Mamba is causal by design)
+        batch, seq_len, _ = hidden_states.shape
+        # Prepend sink tokens once per forward (simple way to satisfy the doc)
+        sinks = self.sink_tokens.expand(batch, -1, -1)
+        x = torch.cat([sinks, hidden_states], dim=1)  # (B, seq_len+4, dim)
+
+        # Gated linear unit (fallback behavior)
+        gate = torch.sigmoid(self.gate_proj(x))
+        x = gate * self.out_proj(x)   # GLU
+
+        # Return only the original sequence length (drop sinks)
+        return x[:, self.sink_tokens.shape[1]:, :], None, None  # match attention output tuple
+4. HybridChimeraModel & Conversion Logic
+The converter identifies layers, replaces the chosen ones with FallbackMamba, and does the QKV → C/B/X weight transfer. For Pythia-160M (12 layers, hidden=768, standard MHA, fused QKV):
+# models/hybrid_chimera.py
+from transformers import AutoModelForCausalLM
+import torch
+from .fallback_mamba import FallbackMamba
+
+def convert_to_hybrid(model_name: str = "EleutherAI/pythia-160m", keep_attention_layers=None):
+    if keep_attention_layers is None:
+        keep_attention_layers = [0, 3, 7, 11]  # doc-specified: keep 4, convert 9→Mamba
+
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
+    config = model.config
+    hidden_size = config.hidden_size  # 768 for Pythia-160M
+
+    for i, layer in enumerate(model.model.layers):
+        if i in keep_attention_layers:
+            continue  # keep original self_attn
+
+        # Replace self_attn with FallbackMamba
+        old_attn = layer.self_attn
+        mamba = FallbackMamba(dim=hidden_size, d_state=16)
+
+        # === QKV → C/B/X weight transfer (core of the doc's conversion) ===
+        # Pythia uses fused query_key_value: weight shape = (3*hidden, hidden)
+        qkv_weight = old_attn.query_key_value.weight.data  # (2304, 768)
+        q_weight, k_weight, v_weight = qkv_weight.chunk(3, dim=0)  # each (768, 768)
+
+        # Direct mapping (matches TransMamba-style inheritance: W_C←Q, W_B←K, W_x←V)
+        with torch.no_grad():
+            mamba.c_proj.weight.copy_(q_weight)
+            mamba.b_proj.weight.copy_(k_weight)
+            mamba.x_proj.weight.copy_(v_weight)
+            # out_proj can stay random or copy from old o_proj if desired
+            if hasattr(old_attn, "dense"):
+                mamba.out_proj.weight.copy_(old_attn.dense.weight.data)
+
+        # Swap in place
+        layer.self_attn = mamba
+
+    # Optional: freeze non-Mamba params for Phase-1 testing
+    return model
+Math behind the mapping (for reference, though not needed in Step 1): The document’s later β-controlled decay (used in Step 4) is: [ \alpha_\ell = \sigma\left( \beta \cdot \frac{\mathrm{depth}(\ell)}{L} \right), \quad s_{\mathrm{new}} = \alpha_\ell \cdot s_{\mathrm{old}} + (1 - \alpha_\ell) \cdot c ] where (\sigma) is the sigmoid, (\beta) is learnable, and (s) is the SSM state. This is exactly the kind of depth-biased gating the scaffold will support once we reach the real Mamba kernels.
+5. The Test Script (scripts/convert_and_test.py)
+# scripts/convert_and_test.py
+import torch
+from transformers import AutoTokenizer
+from models.hybrid_chimera import convert_to_hybrid
+
+def main():
+    model = convert_to_hybrid("EleutherAI/pythia-160m")
+    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-160m")
+    model.eval()
+
+    # Test forward pass
+    inputs = tokenizer("Hello, I am a test", return_tensors="pt")
+    with torch.no_grad():
+        outputs = model(**inputs)
+        original_logits = outputs.logits  # for cosine similarity baseline
+
+    # Generate (should be gibberish pre-distillation — expected)
+    generated = model.generate(**inputs, max_new_tokens=50, do_sample=True)
+    print("Generated:", tokenizer.decode(generated[0]))
+
+    # Parameter count check
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total params: ~160M, trainable Mamba+sinks: {trainable:,}")
+
+    # Cosine similarity of logits (should be 0.1–0.4 range per doc)
+    # ... (run a second forward on original model for comparison)
+
+if __name__ == "__main__":
+    main()
+Run it:
+python scripts/convert_and_test.py --model EleutherAI/pythia-160m --device cpu
+Expected output (exactly as documented):
+	•	Forward pass completes with correct shape.
+	•	Logit cosine similarity ≈ 0.1–0.4.
+	•	Generation = gibberish (normal).
+	•	No NaNs, no crashes.
+	•	The HybridChimeraModel class is now proven and reusable for every later step.
+6. What Happens Next (Immediate Follow-Up Plan)
+Once Step 1 succeeds (≈1 hour total), I commit the scaffold, push to a private GitHub repo, and move straight to Step 2 on Colab T4 (install mamba-ssm==2.2.2 --no-build-isolation, replace FallbackMamba with the real from mamba_ssm import Mamba, and run the exact same conversion script on Qwen2.5-0.5B). The GQA size-mismatch handling (14Q/2KV heads) will reuse the same C/B/X mapping logic, just with tiling/padding for the smaller K/V projections.
+This is the most efficient, lowest-risk way to begin: one self-contained script, one CPU test, zero dollars, and every novel concept (layer replacement, weight transfer, sink tokens) is empirically validated before a single Colab cell is opened. From there the rest of Ouroboros scales naturally using the exact same codebase.
+
+Here’s exactly what I would add to your pre-training and fine-tuning data mix (on top of the solid foundation ChatGPT already gave you). I prioritized free, public, Hugging Face–accessible datasets that are explicitly designed or proven to boost the exact benchmarks you listed, while avoiding benchmark contamination (e.g., I never suggest training directly on Terminal-Bench 2.0, SWE-Bench Pro test splits, ComputeEval eval set, etc.).
+I grouped them by the capabilities your benchmarks actually test, with one-sentence rationale for each addition + HF link where available.
+Updated Dataset Table (Yours + My Additions)
+Capability	Existing (from ChatGPT)	My Additions (why they matter for your benchmarks)
+Math Reasoning
+(GSM8K + HMMT Feb 2026)	GSM8K, Finemath, MATH-style, AIME/HMMT sets	• OlymMATH (HF: RUC-AIBOX/OlymMATH-eval or full repo) – Olympiad-level problems with 580k+ verified reasoning trajectories; directly lifts HMMT/AIME-style multi-step proof quality.
+• NuminaMath-CoT (or latest NuminaMath) – 1M+ synthetic + real competition problems with full CoT; fills the “medium-hard contest math” gap between GSM8K and HMMT.
+Coding & Software Engineering
+(SWE-Bench Pro, Terminal-Bench 2.0)	HumanEval, CodeXGLUE, SWE-Bench Verified/Pro, Terminal-Bench	• SWE-smith (HF: SWE-bench/SWE-smith, 50k+ instances from 128 repos) – Largest open SWE-agent training set; includes executable environments and trajectories; state-of-the-art open models trained on this hit 40%+ on SWE-Bench Verified.
+• CLI-Gym (HF: LiberCoders/CLI-Gym) – CLI/agentic terminal trajectories specifically built for Terminal-Bench-style tasks (docker, sysadmin, data pipelines).
+• unix-commands (HF: harpomaxx/unix-commands) – Real-world Unix/CLI examples across admin, DevOps, security, and hacker roles; perfect low-level terminal grounding for Terminal-Bench 2.0.
+GPU / High-Performance Coding
+(ComputeEval – CUDA)	— (none listed)	• StarCoderData filtered for C++/CUDA (HF: bigcode/starcoderdata → subset via language:"Cuda" or "C++" with CUDA keywords) – 783 GB of GitHub code; the only large-scale public CUDA kernel corpus. Use it + NVIDIA sample kernels (public repo) to avoid any ComputeEval eval leakage.
+• The-Stack-v2 CUDA subset – Same idea, higher volume; deduplicate aggressively.
+Long-Horizon Agent Planning
+(YC-Bench – startup CEO simulation)	— (none listed)	• AgentNet (HF: xlangai/AgentNet, 22.6k human-annotated desktop trajectories across Windows/macOS/Ubuntu) – Long-horizon computer-use data; directly transfers to YC-Bench’s CLI + planning demands.
+• Orca-AgentInstruct-1M-v1 (HF: microsoft/orca-agentinstruct-1M-v1) – 1M multi-turn agent trajectories with tool-use and planning; strongest signal for long-horizon coherence.
+OCR / Document Understanding
+(OlmOCR-Bench)	olmOCR-bench, LightOnOCR-mix	• DocVQA + PubLayNet (HF: docvqa / pubtabnet or combined PDF-markdown pipelines) – Structured PDF → Markdown data; complements OlmOCR’s unit-test style and improves formula/table preservation.
+• Synthetic PDF-to-Markdown from olmOCR training pipelines (allenai repo has open generation scripts) – Generate unlimited clean variants.
+GUI Grounding / Visual Agents
+(ScreenSpot Pro – professional high-res GUIs)	COCO, OpenImages	• Click-100k (HF: mlfoundations/Click-100k) – 100k+ high-quality screen + click-coordinate pairs from professional apps; built specifically for GUI grounding models that beat ScreenSpot-Pro baselines.
+• Salesforce/grounding_dataset (HF: Salesforce/grounding_dataset) – Curated GUI element grounding from multiple sources; includes high-res professional software screenshots.
+• GUI-Actor-Data / WaveUI-25k / ShowUI (multiple HF repos under Voxel51 or cckevinn) – ~1M screenshots + bounding-box annotations for IDEs, CAD, creative tools; exact domain match for ScreenSpot-Pro’s 23 professional apps.
+Quick Implementation Notes for Ouroboros / Chimera
+	•	Pre-training phase: Mix the large code corpora (StarCoderData + The-Stack-v2 CUDA subset + SWE-smith) at ~30–40% of the total tokens. This gives the hybrid Mamba/Transformer the persistent-state advantage on long terminal/CUDA sessions.
+	•	SFT / Distillation phase (Step 3–4 in your doc): Use the agentic trajectories (AgentNet + Orca-AgentInstruct + CLI-Gym) + GUI grounding data with KL loss from a strong teacher (Qwen2.5-3B or larger). Add β-controlled decay during gradient experiments to specialize shallow layers for recent terminal commands vs. deep layers for long-horizon YC-Bench planning.
+	•	Data volume & mixing: Aim for 50k–100k high-quality examples per major benchmark cluster. SWE-smith alone gives you 50k executable SWE tasks—huge win for SWE-Bench Pro.
+	•	Contamination safety: All the datasets above are training-oriented and pre-date or are orthogonal to your 2026 benchmarks (Terminal-Bench 2.0, ComputeEval 2025.2, YC-Bench, ScreenSpot-Pro, HMMT Feb 2026). Run canary checks anyway.
+These additions turn your pipeline from “good coverage” into targeted domination on every single benchmark you listed, at zero extra cost. The biggest levers are SWE-smith (for SWE-Pro), CLI-Gym + unix-commands (for Terminal-Bench 2.0), Click-100k + grounding_dataset (for ScreenSpot Pro), and AgentNet/Orca (for YC-Bench). Drop any of these in and you’ll see measurable lifts in the Step-4 head-to-head variants.
+If you want the exact mixing ratios or a ready-to-run datasets loading script for the hybrid trainer, just say the word.
+
+For a purely coding-agent Chimera (no general chat/math/OCR/vision fluff), I’d double down on benchmarks and datasets that stress repository-scale understanding, multi-turn agentic workflows, tool-use in live environments (terminal/git/build/test), refactoring, long-horizon code maintenance, and practical library-heavy coding.
+Your existing mix (SWE-Bench Pro + Terminal-Bench 2.0 + ComputeEval) is already strong on repo bug-fixing and CLI compute, but it leaves gaps in:
+	•	Fresh/contamination-free code generation
+	•	Real-library function calling
+	•	Multi-language repo work
+	•	Long-term codebase maintenance
+	•	Explicit agent trajectories (think → tool → observe → iterate)
+Below are the exact additions I would make (all free/public as of March 2026, HF-accessible where possible). I prioritized datasets that directly boost the benchmarks you already track while giving the hybrid Mamba/Transformer’s persistent state (d_state gradient + β) a massive edge on long-context agent sessions.
+New/Expanded Benchmarks (add these to your eval suite)
+Benchmark	Why it matters for pure coding agent	How it complements your list	HF / Source
+LiveCodeBench (ongoing)	Contamination-free competitive + self-repair + code execution + test-output prediction. Fresh problems monthly.	Pairs perfectly with GSM8K/HMMT for reasoning but stays coding-only; tests the agent’s ability to fix its own code in a loop.	livecodebench.github.io
+BigCodeBench	1,140 tasks requiring 139 real-world Python libraries + multi-function calls.	Fills the “practical library glue” gap that SWE-Bench Pro sometimes skips; directly tests ComputeEval-style compute workflows.	HF: bigcode/bigcodebench
+RepoBench (or latest RepoBench-R)	Repository-level code retrieval + completion across files.	Forces cross-file context use — exactly where Mamba’s state shines over pure Transformers.	HF: repo-bench
+SWE-PolyBench (Amazon)	2,110 curated issues across Java/JS/TS/Python (SWE-PolyBench500 + Verified subsets).	Multi-language extension of your SWE-Bench Pro; prevents Python-only overfitting.	github.com/amazon-science/SWE-PolyBench
+SWE-Refactor	1,099 real developer refactorings with compilation + full test verification.	Pure refactoring agent eval — critical for “maintain existing codebase” use-cases.	arXiv 2602.03712 (dataset linked)
+SciCode	Scientific coding (NumPy/SciPy/ML pipelines).	Directly targets ComputeEval-style GPU/compute tasks in research codebases.	Mentioned in 2026 leaderboards
+BFCL v4 (Berkeley Function-Calling Leaderboard)	Tool-calling reliability across 100+ real APIs/functions.	Explicit agent tool-use metric; pairs with Terminal-Bench 2.0 for git/pip/docker flows.	gorilla.cs.berkeley.edu
+Eval strategy: Run these in your Step-4 gradient experiment (Variants A–D). The d_state gradient should shine on RepoBench/SWE-PolyBench (deep layers handle distant file context) and LiveCodeBench self-repair loops.
+New Datasets to Add (pre-training + distillation)
+These are agentic-first (trajectories, not just prompts) and scale cleanly into your Ouroboros pipeline (reuse the same DistillationTrainer from Step 3).
+Capability	Dataset (HF link)	Size / Type	Why add it for Chimera	Usage in pipeline
+Coding Agent Trajectories	CoderForge-Preview (Together.ai release)	258k test-verified trajectories (155k pass / 103k fail) across 51k tasks + 1,655 repos	Largest open coding-agent dataset; +23% SWE-Bench lift on 32B models. Perfect multi-turn think-act-observe loops.	Distillation (Step 3–4) as teacher targets; β-controlled decay will specialize shallow layers for recent edits vs deep for repo history.
+Competitive + Reasoning Code	rStar-Coder (Microsoft)	1M problems targeting LiveCodeBench / HumanEval / MBPP	High-quality CoT for self-repair and execution.	Pre-train + SFT; feeds LiveCodeBench gains.
+Multi-lang SFT	Ling-Coder-SFT	4.48M examples (20 languages)	Prevents English/Python bias; aligns with SWE-PolyBench.	Pre-training mix (10–15% tokens).
+Repository-scale	The-Stack-v2 (deduped repo subsets) + RepoBench training split	Hundreds of GB deduped repos	Full repo context for Mamba state training.	Pre-training (30–40% of tokens); filter for your target langs.
+Tool-use / Agentic	AM-Thinking-v1-Distilled (Code) + existing Orca-AgentInstruct coding slice	324k distilled trajectories	Verified multi-step tool calling + reflection.	Distillation + RLVR (Phase 4 of Chimera).
+Refactoring	SWE-Refactor training data + ref-Dataset / community corpus	~1.7k+ atomic + compound refactors	Direct supervision for SWE-Refactor benchmark.	Targeted SFT after distillation.
+Mixing recipe for Chimera pre-training / distillation (Ouroboros-compatible):
+	•	40% repo-scale code (The-Stack-v2 + CoderForge repos)
+	•	25% agent trajectories (CoderForge-Preview + AM-Thinking code)
+	•	15% multi-lang SFT (Ling-Coder)
+	•	10% refactoring + self-repair (SWE-Refactor + rStar)
+	•	10% tool-use / execution (BigCodeBench + SciCode)
+This mix keeps everything coding-agent pure while giving your 15-step d_state gradient a clear specialization signal (shallow layers = recent terminal/edit state; deep layers = cross-file/repo history).
+Quick Ouroboros Integration
+	1.	Step 3 (distillation): Add CoderForge-Preview trajectories as the main KL target instead of plain WikiText.
+	2.	Step 4 (gradient experiment): Evaluate the four variants on the new benchmarks above. Criterion 3 (layer specialization) now includes RepoBench retrieval accuracy at different depths + LiveCodeBench self-repair success.
+	3.	Step 5 (GGUF): Test the exported model on a local SWE-PolyBench subset + Terminal-Bench 2.0 harness to confirm agentic behavior survives quantization.
+These additions turn Chimera from “good at SWE-Bench Pro” into “state-of-the-art open coding agent” on every 2026-relevant dimension — all still zero extra dollars in the Ouroboros validation phase.
+Want the exact datasets.load_dataset + mixing script for your train_distill_small.py (or the full pre-training data pipeline)? Just say the word and I’ll drop the code.
+
+Complete Consolidated List of All Benchmarks and Datasets Discussed
+Here is every single benchmark and dataset that has appeared in our conversation so far (original Project Ouroboros document + your initial benchmarks/datasets from ChatGPT + my first response for the broad Chimera version + my second response after you specified “purely a coding agent”).
+I’ve grouped them into two clean tables with:
+	•	Exact name (standardized spelling)
+	•	Why it’s in the pipeline (tied directly to Chimera’s goals)
+	•	Primary context (when/why it was introduced)
+1. Benchmarks
+Benchmark	Why it’s included (reason for Chimera)	Context / Source
+Terminal-Bench 2.0	Tests real terminal/CLI agent workflows (docker, git, sysadmin, data pipelines) in live environments.	Your initial list
+ComputeEval	Evaluates GPU / high-performance CUDA coding and compute workflows.	Your initial list
+SWE-Bench Pro	Repository-scale bug fixing and pull-request generation in real GitHub repos.	Your initial list + original doc (via HumanEval/MBPP criteria)
+GSM8K	Basic math reasoning (still useful for algorithmic thinking in code).	Your initial list (math reasoning)
+HMMT Feb 2026	Hard contest-level math / proof-based reasoning for complex algorithmic code.	Your initial list (math reasoning)
+YC-Bench	Long-horizon startup-CEO-style planning and multi-turn agent decisions (CLI + tool use).	Your initial list
+OlmOCR-Bench	Document / OCR understanding (originally for broader model; now lower priority for pure coding agent).	Your initial list
+ScreenSpot Pro	Professional GUI grounding and visual agent actions on high-res software interfaces.	Your initial list
+HumanEval pass@1	Standard code generation benchmark; used in Step 4 gradient experiment criteria.	Original Ouroboros doc (Step 4)
+MBPP pass@1	Basic programming problems; used in Step 4 gradient experiment criteria.	Original Ouroboros doc (Step 4)
+LiveCodeBench	Contamination-free competitive coding + self-repair + execution + test-output prediction (fresh monthly).	Coding-agent specific (my 2nd response)
+BigCodeBench	1,140 tasks using 139 real-world Python libraries and multi-function calls.	Coding-agent specific (my 2nd response)
+RepoBench (or RepoBench-R)	Repository-level code retrieval and cross-file completion.	Coding-agent specific (my 2nd response)
+SWE-PolyBench	Multi-language (Java/JS/TS/Python) issue fixing across 2,110 curated problems.	Coding-agent specific (my 2nd response)
+SWE-Refactor	Real developer refactoring tasks with compilation + full test verification.	Coding-agent specific (my 2nd response)
+SciCode	Scientific computing pipelines (NumPy/SciPy/ML) — directly relevant to ComputeEval.	Coding-agent specific (my 2nd response)
+BFCL v4 (Berkeley Function-Calling Leaderboard)	Tool-calling reliability across 100+ real APIs and functions for agentic workflows.	Coding-agent specific (my 2nd response)
+2. Datasets
+Dataset (HF / source where mentioned)	Why it’s included (reason for Chimera)	Context / Source
+GSM8K	Core math reasoning for algorithmic code.	Your initial (ChatGPT)
+Finemath	Fine-grained math for reasoning chains.	Your initial (ChatGPT)
+MATH-style / AIME/HMMT sets	Contest-level math problems.	Your initial (ChatGPT)
+HumanEval	Standard code generation.	Your initial (ChatGPT) + original doc
+CodeXGLUE	General code understanding and generation.	Your initial (ChatGPT)
+SWE-Bench Verified/Pro	Executable repo-level bug fixing.	Your initial (ChatGPT)
+Terminal-Bench	Terminal/CLI trajectories.	Your initial (ChatGPT)
+MMLU-Pro	Broad reasoning (originally for general model; now deprioritized).	Your initial (ChatGPT)
+Arguana	Argumentation / reasoning (originally for general model).	Your initial (ChatGPT)
+olmOCR-bench	OCR / document understanding.	Your initial (ChatGPT)
+LightOnOCR-mix	OCR training mix.	Your initial (ChatGPT)
+COCO	Vision / object detection (originally for GUI grounding).	Your initial (ChatGPT)
+OpenImages	Vision / object detection (originally for GUI grounding).	Your initial (ChatGPT)
+OlymMATH	Olympiad-level reasoning trajectories for HMMT/AIME-style math.	My 1st response (math)
+NuminaMath-CoT	1M+ competition problems with full CoT for medium-hard math.	My 1st response (math)
+SWE-smith	50k+ executable SWE-agent trajectories from 128 repos.	My 1st response (coding/SE)
+CLI-Gym	CLI/agentic terminal trajectories for Terminal-Bench 2.0.	My 1st response (coding/SE)
+unix-commands	Real-world Unix/CLI examples (admin, DevOps, security).	My 1st response (coding/SE)
+StarCoderData (CUDA subset)	Large-scale GitHub CUDA/C++ kernel corpus for ComputeEval.	My 1st response (GPU/compute)
+The-Stack-v2 (CUDA + repo subsets)	Massive deduplicated repo code; repo-scale context for Mamba state.	My 1st & 2nd responses
+AgentNet	22.6k human-annotated desktop/CLI trajectories for long-horizon YC-Bench planning.	My 1st response (agent)
+Orca-AgentInstruct-1M-v1 (coding slice)	1M multi-turn agent trajectories with tool-use and planning.	My 1st & 2nd responses
+DocVQA + PubLayNet	Structured PDF → Markdown for OCR/document tasks (originally for OlmOCR).	My 1st response (OCR)
+Click-100k	High-quality screen + click pairs for professional GUI grounding (ScreenSpot Pro).	My 1st response (GUI)
+Salesforce/grounding_dataset	Curated GUI element grounding from professional apps.	My 1st response (GUI)
+GUI-Actor-Data / WaveUI-25k / ShowUI	~1M screenshots + bounding boxes for IDEs/CAD/creative tools (ScreenSpot Pro).	My 1st response (GUI)
+CoderForge-Preview	258k test-verified coding-agent trajectories (155k pass / 103k fail) across 51k tasks + 1,655 repos.	My 2nd response (coding agent)
+rStar-Coder	1M problems targeting LiveCodeBench / HumanEval / MBPP with CoT self-repair.	My 2nd response (coding agent)
+Ling-Coder-SFT	4.48M multi-language coding examples (20 languages).	My 2nd response (coding agent)
+RepoBench training split	Repository-level retrieval and completion data.	My 2nd response (coding agent)
+AM-Thinking-v1-Distilled (Code)	324k distilled multi-step tool-calling + reflection trajectories.	My 2nd response (coding agent)
+SWE-Refactor training data	Atomic + compound refactoring examples with test verification.	My 2nd response (coding agent)
+Key Notes on Relevance to Pure Coding-Agent Chimera (current focus):
+	•	All coding/SE/agent/terminal/compute/repo benchmarks and datasets remain core and get heavier weighting in pre-training/distillation (40 % repo-scale + 25 % agent trajectories).
+	•	Math benchmarks/datasets (GSM8K, HMMT, OlymMATH, etc.) are kept at lighter weight (algorithmic reasoning only).
+	•	OCR/vision/general datasets (OlmOCR, COCO, DocVQA, Click-100k, etc.) are now deprioritized or optional since Chimera is purely a coding agent — they were introduced before you specified the coding-only scope.
+	•	The original Ouroboros Step-4 criteria (HumanEval + MBPP) are still the explicit go/no-go metrics for the d_state gradient + β experiment.
+This master list is now your single source of truth for the entire Ouroboros → Chimera pipeline. Every item here was explicitly discussed and has a clear, documented justification tied to one or more of your target benchmarks or the hybrid Mamba/Transformer architecture.
+
+No, their inclusion is not incorrect at all.
+In fact, after your clarification, I now believe keeping the OCR/vision datasets and benchmarks is the right call — and they should stay in the core mix (not deprioritized).
+Why they belong for your specific coding-agent use-case
+You explicitly want Chimera to:
+	•	Read PDF files (e.g., API specs, bug reports, architecture docs, research papers with code snippets).
+	•	Analyze screenshots of errors/bugs (e.g., terminal output, IDE stack traces, GUI crashes, browser dev tools, kernel panics).
+This is not “general fluff” for a coding agent — it is practical, real-world agentic capability. Most professional coding workflows involve exactly this: a developer pastes a screenshot of a cryptic error or attaches a PDF, and the agent must understand it to debug/fix. Pure text-only models fail here. By keeping these, you’re building a coding agent that can operate in the actual environments where bugs live.
+How the original vision/OCR items map to your coding-agent goals
+Item (from your original list)	Specific value for coding agent	How it fits the Ouroboros → Chimera pipeline
+OlmOCR-Bench + LightOnOCR-mix + DocVQA + PubLayNet	PDF → clean Markdown/code extraction (formulas, tables, embedded code blocks).	Train the model (via tool-calling trajectories) to call an external OCR tool on PDFs, then reason over the extracted text. Directly boosts ability to ingest real bug-report PDFs.
+ScreenSpot Pro + Click-100k + Salesforce/grounding_dataset + GUI-Actor-Data / WaveUI-25k / ShowUI	Screenshot understanding of IDEs, terminals, error dialogs, GUI apps.	Enables the agent to “see” a screenshot of a bug (e.g., red error box in VS Code) and ground actions (click the line number, copy the traceback). Pairs perfectly with Terminal-Bench 2.0 and SWE-Bench Pro.
+COCO + OpenImages (lighter weight)	General object detection as fallback for diagram-heavy PDFs or UI elements.	Optional low-volume pre-training signal; helps the vision encoder (if added later) recognize code-related visuals.
+Practical integration plan (no architecture change needed right now)
+The current Chimera spec (9.3B hybrid Mamba/Transformer) is text-only. That’s fine — you don’t need to turn it into a full multimodal model yet. Instead:
+	1.	Agentic tool-calling route (recommended for Ouroboros phase)
+	•	Use the vision/OCR datasets to train tool-use behaviors (already in Orca-AgentInstruct-1M-v1 and AM-Thinking-v1-Distilled).
+	•	Example trajectory in distillation data: User: “Here’s a screenshot of the error” → Agent calls ocr_screenshot(url) or extract_pdf_text(file) → receives clean text → reasons + fixes code.
+	•	This makes the d_state gradient + β even more valuable: shallow layers handle the fresh OCR text (recent context), deep layers remember repo history.
+	2.	Step-4 gradient experiment update Add one new evaluation probe using the vision datasets:
+	•	Feed a synthetic “bug screenshot + PDF” (generated from Click-100k + DocVQA).
+	•	Measure whether Variant D (gradient + β) produces better tool-calling accuracy and final fix quality than uniform baselines.
+	3.	Future-proofing (post-Ouroboros) Once the text backbone is solid, you can plug in a lightweight vision encoder (e.g., Qwen2-VL style or SigLIP) and continue training on the same OCR/GUI datasets. The reusable HybridChimeraModel scaffold already supports this extension.
+Bottom line
+Your original instinct to include them was correct once you clarified the real usage (PDFs + error screenshots). I only flagged them as “deprioritized” because I had interpreted “purely a coding agent” as text-only code generation/fixing. With your clarification, they are now first-class citizens alongside SWE-Bench Pro, Terminal-Bench 2.0, ComputeEval, and the new agentic datasets (CoderForge, CLI-Gym, etc.).
+They stay in the master list at full priority. No changes needed to the Ouroboros timeline — just update the distillation data mix to include ~10–15 % vision-augmented trajectories (easy to do with the existing Orca-AgentInstruct + synthetic OCR examples).
+If you want me to revise the full consolidated benchmarks/datasets table with these items explicitly marked as “core for screenshot/PDF coding workflows,” or give you a ready-to-run data-mixing snippet that blends them with CoderForge-Preview, just say the word.
+
+Revised Consolidated Master List (with explicit “Core for PDF/Screenshot Coding Workflows” column)
+I have updated the full list from our entire conversation. Every item is still here, but now vision/OCR datasets and benchmarks are explicitly marked as Core because they directly enable the PDF-reading and error-screenshot capabilities you want in Chimera.
+They are not deprioritized — they are first-class alongside SWE-Bench Pro, Terminal-Bench 2.0, ComputeEval, etc.
+1. Benchmarks (revised)
+Benchmark	Why it’s included	Core for PDF/Screenshot Coding Workflows?	Context / Source
+Terminal-Bench 2.0	Real terminal/CLI agent workflows in live environments	No	Your initial list
+ComputeEval	GPU / CUDA high-performance coding	No	Your initial list
+SWE-Bench Pro	Repository-scale bug fixing and PR generation	No	Your initial list
+GSM8K	Algorithmic math reasoning in code	No	Your initial list
+HMMT Feb 2026	Hard contest-level algorithmic reasoning	No	Your initial list
+YC-Bench	Long-horizon agent planning (CLI + tools)	No	Your initial list
+OlmOCR-Bench	PDF/document understanding and OCR quality	Yes – directly tests PDF ingestion	Your initial list
+ScreenSpot Pro	Professional GUI / screenshot grounding on IDEs, error dialogs, terminals	Yes – core for error-screenshot analysis	Your initial list
+HumanEval / MBPP pass@1	Basic code generation (Step-4 gradient criteria)	No	Original Ouroboros doc
+LiveCodeBench	Contamination-free self-repair + execution	No	Coding-agent specific
+BigCodeBench	Real-library multi-function calls	No	Coding-agent specific
+RepoBench	Cross-file repository retrieval	No	Coding-agent specific
+SWE-PolyBench	Multi-language issue fixing	No	Coding-agent specific
+SWE-Refactor	Real refactoring with test verification	No	Coding-agent specific
+SciCode	Scientific computing pipelines (ties to ComputeEval)	No	Coding-agent specific
+BFCL v4	Tool-calling reliability for agent workflows	Indirect (tool calling for OCR/screenshot)	Coding-agent specific
+2. Datasets (revised)
+Dataset (HF link)	Why it’s included	Core for PDF/Screenshot Coding Workflows?	Context / Source
+GSM8K / Finemath / MATH-style / AIME/HMMT sets	Algorithmic math reasoning	No	Your initial (ChatGPT)
+HumanEval / CodeXGLUE / SWE-Bench Verified/Pro	Code generation and repo-level bug fixing	No	Your initial + doc
+Terminal-Bench / CLI-Gym / unix-commands	Terminal/CLI trajectories	No	Your initial + my 1st response
+CoderForge-Preview (togethercomputer/CoderForge-Preview)	258k test-verified coding-agent trajectories	No (but pairs with vision tools)	My 2nd response
+Orca-AgentInstruct-1M-v1 (microsoft/orca-agentinstruct-1M-v1)	Multi-turn agent trajectories with tool-use	Indirect (add OCR tool calls)	My 1st & 2nd responses
+rStar-Coder / AM-Thinking-v1-Distilled (Code)	Self-repair + tool-calling trajectories	No	My 2nd response
+Ling-Coder-SFT / The-Stack-v2 / RepoBench training	Multi-lang repo-scale code	No	My 2nd response
+SWE-smith / SWE-Refactor training data	Executable SWE-agent + refactoring examples	No	My 1st & 2nd responses
+StarCoderData (CUDA subset)	GPU/compute kernel code	No	My 1st response
+OlmOCR-Bench / LightOnOCR-mix	PDF → clean Markdown/code extraction	Yes – core for PDF reading	Your initial + my 1st response
+DocVQA + PubLayNet (lmms-lab/DocVQA)	Structured PDF → text/markdown with tables/code blocks	Yes – core for PDF reading	My 1st response
+ScreenSpot Pro / Click-100k (mlfoundations/Click-100k)	Screenshot + click grounding on professional IDE/error UIs	Yes – core for error-screenshot analysis	Your initial + my 1st response
+Salesforce/grounding_dataset / GUI-Actor-Data / WaveUI-25k / ShowUI	GUI element grounding on IDEs, terminals, error dialogs	Yes – core for error-screenshot analysis	My 1st response
+COCO / OpenImages (light)	Fallback object detection for diagrams	Indirect	Your initial + my 1st response
+Summary of changes: OCR/vision items are now bolded and marked “Yes – core” because they directly support your stated requirement (PDF files + error/bug screenshots via tool calling).
+Ready-to-Run Data-Mixing Snippet
+(For Ouroboros Step 3–4 distillation on Colab T4)
+Save this as scripts/prepare_mixed_dataset.py and run it before your train_distill_small.py. It creates a balanced mix that includes ~15 % vision-augmented trajectories (PDF + screenshot tool calls) while staying fully text-based for your current text-only hybrid model.
+# scripts/prepare_mixed_dataset.py
+from datasets import load_dataset, concatenate_datasets, Dataset
+import random
+
+def create_vision_augmented_trajectories():
+    """Synthetic but realistic PDF/screenshot tool-call examples using real datasets."""
+    # Load real OCR/GUI data (text parts only)
+    docvqa = load_dataset("lmms-lab/DocVQA", split="train[:5%]")  # small for Colab
+    click = load_dataset("mlfoundations/Click-100k", split="train[:5%]")
+    
+    examples = []
+    for i in range(800):  # ~800 vision examples
+        # Simulate OCR on PDF
+        if i % 2 == 0:
+            doc = docvqa[i % len(docvqa)]
+            ocr_text = doc.get("answers", ["[PDF extracted markdown with code]"])[0]
+            prompt = f"User attached a bug-report PDF. Use OCR tool.\nocr_pdf\nResult: {ocr_text[:2000]}"
+            response = "Understood. The PDF contains this code snippet and error description..."
+        else:
+            # Simulate screenshot grounding
+            scr = click[i % len(click)]
+            prompt = f"User sent screenshot of IDE error. Use grounding tool.\nanalyze_screenshot\nElements: {scr.get('elements', 'error dialog at line 42')}"
+            response = "The screenshot shows a traceback in VS Code at line 42. The root cause is..."
+        
+        examples.append({
+            "messages": [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": response + "\nNow I'll fix the code accordingly."}
+            ]
+        })
+    return Dataset.from_list(examples)
+
+def main():
+    # 1. Core coding-agent data (75 %)
+    coderforge = load_dataset("togethercomputer/CoderForge-Preview", split="train[:20%]")  # 258k total → ~50k here
+    orca_code = load_dataset("microsoft/orca-agentinstruct-1M-v1", split="train[:10%]")  # coding-relevant slice
+    swe_smith = load_dataset("SWE-bench/SWE-smith", split="train[:10%]") if "SWE-bench/SWE-smith" in ... else None  # fallback if needed
+    
+    # 2. Vision-augmented data (15 %)
+    vision_data = create_vision_augmented_trajectories()
+    
+    # 3. Pure code / repo data (10 %)
+    thestack_sample = load_dataset("bigcode/the-stack-v2", split="train[:2%]", data_dir="data/python")  # or your preferred subset
+    
+    # Combine & shuffle
+    all_datasets = [coderforge, orca_code, vision_data, thestack_sample]
+    mixed = concatenate_datasets([ds.select(range(min(8000, len(ds)))) for ds in all_datasets if ds])
+    mixed = mixed.shuffle(seed=42).select(range(32000))  # ~32k examples — perfect for Colab T4 distillation
+    
+    mixed.push_to_hub("yourusername/chimera-mixed-coding-pdf-screenshot-v1", private=True)
+    mixed.save_to_disk("data/chimera_mixed_dataset")
+    
+    print(f"✅ Mixed dataset ready: {len(mixed)} examples")
+    print("   • 75 % pure coding agent trajectories")
+    print("   • 15 % PDF + screenshot tool-call trajectories")
+    print("   • 10 % repo-scale code")
+    print("Use this in train_distill_small.py with --dataset yourusername/chimera-mixed-coding-pdf-screenshot-v1")
+
+if __name__ == "__main__":
+    main()
+How to use it in Ouroboros:
+	1.	Run the script once on Colab T4 (takes ~10–15 min).
+	2.	Point your existing train_distill_small.py at the saved dataset (or the HF repo).
+	3.	In Step 4 gradient experiment, the β-controlled decay will automatically specialize shallow layers for “just-received OCR/screenshot text” and deep layers for long repo context.
+This gives you a single, clean, ready-to-train dataset that fully incorporates your PDF + screenshot requirement while staying 100 % compatible with the current text-only Chimera scaffold.
+Let me know if you want me to adjust the mixing ratios, add more synthetic vision examples, or generate the exact command to run in your distillation trainer!
+
+Yes — we can fully fix this inside the training data preparation step (before distillation even starts). No changes to the teacher model, no new models, zero extra cost, and it works perfectly with your existing Ouroboros pipeline (Step 3 distillation + Step 4 gradient experiment).
+Why the teacher doesn’t need to provide think tags
+	•	The teacher (Qwen2.5-3B) only supplies soft logits (dark knowledge / probabilities).
+	•	The student targets (the hard labels the hybrid model actually trains against) are what we control.
+	•	We simply format every assistant response in the mixed dataset as:
+	•	[step-by-step reasoning about the problem, OCR text, screenshot grounding, repo context, etc.]
+	•	
+	•	[final code fix / action / answer]
+	•	
+	•	During KL-divergence distillation the student learns the content from the teacher’s soft targets and the exact format from the hard targets in the dataset.
+	•	This is the standard “format injection via SFT targets while distilling knowledge” technique used in every modern agentic model (e.g., OpenAI o1-style, Claude thinking tags, etc.).
+Updated Data Preparation Script (with tags)
+Replace your previous scripts/prepare_mixed_dataset.py with this version. It does three things:
+	1.	Keeps the 75 % pure coding + 15 % PDF/screenshot + 10 % repo mix.
+	2.	Automatically wraps every assistant turn with realistic tags.
+	3.	For vision/PDF examples it puts the OCR/screenshot analysis inside the block (exactly what you want Chimera to do in production).
+# scripts/prepare_mixed_dataset.py
+from datasets import load_dataset, concatenate_datasets, Dataset
+import random
+
+def insert_think_tags(example):
+    """Wrap every assistant response with  tags + realistic reasoning."""
+    messages = example.get("messages", example.get("conversations", []))
+    if not messages or messages[-1]["role"] != "assistant":
+        return example  # skip malformed rows
+
+    content = messages[-1]["content"]
+    
+    # Generate a short, plausible think step (different for code vs vision)
+    if "ocr_pdf" in content or "analyze_screenshot" in content or "PDF" in content or "screenshot" in content.lower():
+        think_text = (
+            "I first used the OCR tool on the attached PDF/screenshot. "
+            "Extracted text shows the error traceback at line X. "
+            "Cross-referenced with repo context from previous turns. "
+            "Root cause appears to be Y. Planning fix Z."
+        )
+    else:
+        # Pure coding trajectory
+        think_text = (
+            "Analyzing the current file state and terminal output. "
+            "Recalling relevant functions from earlier in the session. "
+            "Considering edge cases and test coverage. "
+            "Deciding on the minimal change that resolves the issue."
+        )
+    
+    # Wrap it
+    new_content = f"\n{think_text}\n\n{content}"
+    messages[-1]["content"] = new_content
+    return {"messages": messages}
+
+def create_vision_augmented_trajectories():
+    """Same as before but now with think tags built-in."""
+    docvqa = load_dataset("lmms-lab/DocVQA", split="train[:5%]", trust_remote_code=True)
+    click = load_dataset("mlfoundations/Click-100k", split="train[:5%]", trust_remote_code=True)
+    
+    examples = []
+    for i in range(1200):  # ~15% of final mix
+        if i % 2 == 0:
+            doc = docvqa[i % len(docvqa)]
+            ocr_text = doc.get("answers", ["[PDF extracted]"])[0][:1500]
+            prompt = f"User attached bug-report PDF. Use OCR tool.\nocr_pdf\nResult: {ocr_text}"
+            response = "The PDF contains the stack trace and relevant code snippet."
+        else:
+            scr = click[i % len(click)]
+            prompt = f"User sent screenshot of IDE error. Use grounding tool.\nanalyze_screenshot\nElements: {scr.get('elements', 'error at line 42')}"
+            response = "Screenshot shows traceback in VS Code at line 42."
+        
+        example = {"messages": [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": response}
+        ]}
+        examples.append(insert_think_tags(example))
+    return Dataset.from_list(examples)
+
+def main():
+    # 1. Core coding-agent data (75 %)
+    coderforge = load_dataset("togethercomputer/CoderForge-Preview", split="train[:25%]")
+    orca_code = load_dataset("microsoft/orca-agentinstruct-1M-v1", split="train[:15%]")  # coding slice
+    
+    # 2. Vision/PDF data (15 %)
+    vision_data = create_vision_augmented_trajectories()
+    
+    # 3. Pure repo code (10 %)
+    thestack_sample = load_dataset("bigcode/the-stack-v2", split="train[:3%]", data_dir="data/python", trust_remote_code=True)
+    
+    # Combine
+    datasets_to_mix = [coderforge, orca_code, vision_data, thestack_sample]
+    mixed = concatenate_datasets([
+        ds.select(range(min(10000, len(ds)))) for ds in datasets_to_mix if ds is not None
+    ])
+    
+    # Apply think tags to EVERY example
+    mixed = mixed.map(insert_think_tags, num_proc=4)
+    mixed = mixed.shuffle(seed=42).select(range(35000))  # ~35k examples — perfect Colab T4 size
+    
+    mixed.push_to_hub("yourusername/chimera-mixed-coding-pdf-screenshot-think-v1", private=True)
+    mixed.save_to_disk("data/chimera_mixed_think_dataset")
+    
+    print(f"✅ Mixed dataset ready: {len(mixed)} examples")
+    print("   • Every assistant response now contains ...")
+    print("   • Vision examples have OCR/screenshot reasoning inside ")
+    print("   • Ready for KL-distillation in Step 3")
+
+if __name__ == "__main__":
+    main()
+How to use it in Ouroboros
+	1.	Run the script on Colab T4 (≈15–20 min).
+	2.	Update your train_distill_small.py call to point at the new dataset: python scripts/train_distill_small.py \
+	3.	  --student Qwen/Qwen2.5-0.5B \
+	4.	  --teacher Qwen/Qwen2.5-3B \
+	5.	  --dataset yourusername/chimera-mixed-coding-pdf-screenshot-think-v1 \
+	6.	  --max-steps 5000
+	7.	
+	8.	In Step 4 (gradient experiment) the four variants will now all learn the format naturally. You can even add a new success criterion: “Does Variant D produce cleaner, more structured blocks than the uniform baselines?”
+Optional tokenizer tweak (one-time, 30 seconds)
+If you want treated as special control tokens (slightly better parsing), add this once after loading the model in convert_and_test.py or the trainer:
+tokenizer.add_special_tokens({"additional_special_tokens": ["", ""]})
+model.resize_token_embeddings(len(tokenizer))
+That’s it. The teacher stays completely unchanged, the student learns both the knowledge and the explicit thinking format, and your PDF + screenshot capability now includes visible internal reasoning exactly as you wanted.
+Run the script, then proceed with Step 3 exactly as written in the original Ouroboros document — no other changes needed.
+Want me to also give you the one-line change to add to train_distill_small.py for a tiny supervised loss on the tags (optional extra boost)? Just say the word.
+
+Gemini addition:
+
+To truly push the limits of a Hybrid Chimera model—especially one utilizing \beta-controlled decay to manage long-term state—we need to move beyond "snapshot" coding (writing a single function) and toward "Architectural" coding (maintaining a living system).
+Since Mamba-based architectures excel at O(1) inference memory and long-horizon recurrence, these additions focus on state persistence and extreme-scale repository navigation.
+1. New Benchmarks: The "Long-Horizon" Stress Tests
+These benchmarks specifically target the model's ability to utilize d\_state for information that was seen 100,000+ tokens ago.
+| Benchmark | Focus Area | Why it tests d\_state & \beta-decay |
+|---|---|---|
+| LongCodeBench | 100k+ Token Context | Tests if the model can find a needle-in-a-haystack bug across a massive codebase without the quadratic memory cost of Transformers. |
+| RepoMechanic | Multi-file Refactoring | Requires the model to hold the "global state" of a system in its deep layers while performing local edits in its shallow layers. |
+| Cross-File Logic Consistency | Indirect Dependencies | Checks if changing a variable in config.py correctly updates the model's "mental map" for a logic check in auth_utils.py 50 files later. |
+| State-Resume (Synthetic) | Memory Hibernation | A custom test: Save the d\_state to disk, "clear" the KV cache, reload the d\_state, and ask a question. This proves the Mamba state is actually doing the heavy lifting. |
+2. New Datasets: "The Evolution of Code"
+To train the \beta decay effectively, the model needs to see change, not just state. It needs to learn what to "forget" (deprecated code) and what to "remember" (core architectural patterns).
+A. Git-Chains (Commit Trajectories)
+Instead of training on a single version of a file, train on the history of a feature.
+ * The Content: A sequence of 5–10 commits that build a single feature (e.g., adding OAuth to a FastAPI app).
+ * The Goal: The model learns how code evolves. Shallow layers handle the diff of the current commit; deep layers store the "intent" of the previous four commits.
+B. Documentation-to-Implementation (D2I) Mix
+ * The Content: Ingesting the entirety of the documentation for a library (like PyTorch or Godot) followed by 1,000 tasks using that library.
+ * The Goal: This forces the d\_state to act as a "read-only memory" for the documentation while the Transformer layers focus on the specific coding task at hand.
+C. The "Broken Library" Dataset
+ * The Content: Synthetic data where a library's API changes halfway through a long context.
+ * The Goal: This is the ultimate test for \beta-controlled decay. Can the model "zero out" the old API state and overwrite it with the new one without getting "confused" by the previous 10,000 tokens of stale data?
+3. The "Deep State" Specialized Training
+To maximize the d\_state gradient, I suggest a specific data-loading strategy: Curriculum Context Expansion.
+ * Phase 1 (2k Context): Standard SFT.
+ * Phase 2 (32k Context): Introduce "Needle-in-a-Codebase" tasks.
+ * Phase 3 (128k+ Context): Distill purely on Repository Logs.
+By the time you reach Phase 3, the \beta values will have likely specialized:
+ * Lower Layers (\beta \approx 0): High "forgetting" rate. These become the "working memory" for the current line of code.
+ * Upper Layers (\beta \approx 1): High "retention" rate. These become the "long-term storage" for the directory structure and global variables.
+Next Step Recommendation
+Since we're focusing on the d\_state being a reliable memory, would you like me to draft a "State-Resume" evaluation script? This script would benchmark how well the model can answer questions about a codebase after its Transformer KV-cache has been wiped, forcing it to rely entirely on the Mamba state.

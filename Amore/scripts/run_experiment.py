@@ -41,7 +41,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
 from chimera.models.hybrid_model import HybridChimeraModel
-from chimera.models.beta_mamba import BetaGatedMamba
+from chimera.models.beta_mamba import BetaGatedMamba, PSoftMambaWrapper
 from chimera.utils.layer_plan import build_layer_plan, ATTN_KEEP_DEFAULTS
 
 
@@ -192,6 +192,12 @@ VARIANTS = {
         "d_state_spec": {"type": "uniform", "d": 64},
         "gate_mode":    "constant",
         "label":        "Uniform (d=64) + constant gate",
+    },
+    "B_psoft": {
+        "d_state_spec": {"type": "uniform", "d": 64},
+        "gate_mode":    "constant",
+        "psoft":        True,
+        "label":        "Uniform (d=64) + constant gate + P_soft",
     },
 }
 
@@ -384,6 +390,18 @@ def build_variant_student(args, cfg, device):
         if shared_beta is not None:
             hybrid.register_parameter("shared_beta", shared_beta)
 
+    # P_soft: wrap BetaGatedMamba with error-driven input (must be AFTER gate wrapping)
+    # Creates a shared loss accumulator on the model; training loop reads it each step.
+    hybrid.psoft_loss_accum = []
+    if cfg.get("psoft"):
+        d_model = base.config.hidden_size
+        for plan in hybrid.layer_plan:
+            if plan["kind"] == "mamba":
+                wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
+                wrapper.mamba = PSoftMambaWrapper(
+                    wrapper.mamba, d_model, loss_accum=hybrid.psoft_loss_accum
+                )
+
     # Freeze all, then unfreeze Mamba wrappers + sink tokens
     for p in hybrid.parameters():
         p.requires_grad_(False)
@@ -484,6 +502,13 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
             teacher_logits.float(),
             T=args.temperature,
         )
+
+        # P_soft prediction loss — accumulated by PSoftMambaWrapper during forward
+        psoft_accum = getattr(student, "psoft_loss_accum", [])
+        if psoft_accum:
+            loss_pc = sum(psoft_accum) / len(psoft_accum)
+            loss = loss + args.lambda_pc * loss_pc
+            psoft_accum.clear()
 
         if not torch.isfinite(loss):
             print(f"  [{name}] Step {step}: NaN/Inf loss — stopping variant.")
@@ -607,6 +632,8 @@ def parse_args():
                         "model weights only (warm-start for Round 2).")
     p.add_argument("--checkpoint-every", type=int, default=2500,
                    help="Save mid-run checkpoint every N steps (0 = final only).")
+    p.add_argument("--lambda-pc",        type=float, default=0.1,
+                   help="P_soft prediction loss weight. Only used for B_psoft variant.")
     return p.parse_args()
 
 

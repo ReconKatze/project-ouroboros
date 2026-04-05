@@ -3,7 +3,7 @@
 #
 # Run in Colab:
 #   !git clone https://github.com/ReconKatze/project-ouroboros.git
-#   %cd project-ouroboros
+#   %cd project-ouroboros/Amore
 #   !bash scripts/colab_setup.sh
 #
 # Then run Step 2b:
@@ -55,5 +55,6 @@ echo ""
 echo "Verify mamba-ssm is importable:"
 python -c "from mamba_ssm import Mamba3; print('  mamba_ssm (Mamba3) OK:', Mamba3)"
 echo ""
-echo "Run Step 2b:"
-echo "  python scripts/convert_and_test.py --model Qwen/Qwen2.5-0.5B --device cuda"
+echo "Run experiment (Round 2, warm-start from B_gated checkpoint):"
+echo "  python scripts/run_experiment.py --variants B_gated --steps 10000"
+echo "  python scripts/run_experiment.py --variants Round2A --steps 10000 --resume checkpoints/B_gated_final.pt"

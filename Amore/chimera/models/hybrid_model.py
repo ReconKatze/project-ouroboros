@@ -224,9 +224,16 @@ class MambaGuidedAttentionWrapper(nn.Module):
             step_ref:      Single-element list [step] updated by training loop.
         """
         super().__init__()
-        self.original_attn   = original_attn
-        self.d_model         = d_model
-        self.preceding_mamba = None   # set by build_variant_student after init
+        self.original_attn = original_attn
+        self.d_model       = d_model
+
+        # preceding_mamba is owned by its parent layer, not by this wrapper.
+        # Using object.__setattr__ bypasses nn.Module.__setattr__ so it is
+        # stored in __dict__ rather than _modules — avoids registering the
+        # MambaAttentionWrapper as a competing submodule, which can disrupt
+        # PyTorch's parameter deduplication and hide W_q_rel / W_k_rel.
+        # (Same pattern as _shared_beta in BetaGatedMamba.)
+        object.__setattr__(self, "_preceding_mamba", None)
 
         d_rel = self._D_REL
         self.W_q_rel = nn.Linear(d_model, d_rel, bias=False)
@@ -238,6 +245,7 @@ class MambaGuidedAttentionWrapper(nn.Module):
         self._align_accum = align_accum
         self._stats_accum = stats_accum
         self._step_ref    = step_ref
+        self._first_call  = True   # diagnostic: print once on first forward
 
     # ------------------------------------------------------------------
     # Internals
@@ -293,16 +301,24 @@ class MambaGuidedAttentionWrapper(nn.Module):
     ):
         step = self._step_ref[0]
 
-        # No relevance available (first layer or inference) → full attention
-        if (self.preceding_mamba is None
-                or self.preceding_mamba._last_out is None):
+        # Diagnostic: confirm this wrapper is actually being called (once per wrapper)
+        if self._first_call:
+            pm = self._preceding_mamba
+            print(f"  [H] MambaGuidedAttentionWrapper.forward() reached "
+                  f"(preceding_mamba={type(pm).__name__ if pm is not None else 'None'}, "
+                  f"W_q_rel params={self.W_q_rel.weight.numel()})")
+            self._first_call = False
+
+        # No relevance available (first attention layer or inference) → full attention
+        if (self._preceding_mamba is None
+                or self._preceding_mamba._last_out is None):
             return self.original_attn(
                 hidden_states, attention_mask=attention_mask,
                 position_ids=position_ids,
                 position_embeddings=position_embeddings, **kwargs,
             )
 
-        relevance  = self.preceding_mamba._last_out         # detached [B, L, d_model]
+        relevance  = self._preceding_mamba._last_out        # detached [B, L, d_model]
         rel_scores = self._rel_scores(relevance)            # [B, L, L]
 
         # Entropy regularisation — train W_q_rel / W_k_rel to produce

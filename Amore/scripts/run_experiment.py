@@ -469,8 +469,18 @@ def build_variant_student(args, cfg, device):
                     stats_accum=hybrid.h_stats_accum,
                     step_ref=hybrid.h_step_ref,
                 )
-                guided.preceding_mamba = last_mamba
+                # Use object.__setattr__ to mirror the pattern in __init__:
+                # keeps _preceding_mamba out of _modules so it doesn't
+                # create a competing submodule path to the Mamba weights.
+                object.__setattr__(guided, "_preceding_mamba", last_mamba)
                 hybrid.adapter.set_attention(layer, guided)
+                # Diagnostic: confirm wrapper placement and param registration
+                n_params = sum(p.numel() for p in guided.parameters())
+                print(f"  [H] Layer {plan['layer_idx']:2d}: "
+                      f"MambaGuidedAttentionWrapper registered, "
+                      f"params={n_params:,} "
+                      f"(W_q_rel={guided.W_q_rel.weight.numel()}, "
+                      f"W_k_rel={guided.W_k_rel.weight.numel()})")
 
     # Freeze all, then unfreeze Mamba wrappers + sink tokens
     for p in hybrid.parameters():

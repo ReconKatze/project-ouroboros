@@ -66,12 +66,14 @@ def main():
     print(f"  Source variant: {src_var}  |  step: {src_step}")
 
     # ------------------------------------------------------------------
-    # 2. Build target model architecture on CPU
+    # 2. Build target model architecture on the correct device
+    #    Must match the training device so key names are consistent
+    #    (CPU → FallbackMamba keys, CUDA → RealMambaBlock keys)
     # ------------------------------------------------------------------
-    print(f"\nBuilding target model: {args.variant} ...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"\nBuilding target model: {args.variant} on {device} ...")
     build_args = Namespace(student=args.student, attn_indices=args.attn_indices)
-    target = build_variant_student(build_args, VARIANTS[args.variant],
-                                   torch.device("cpu"))
+    target = build_variant_student(build_args, VARIANTS[args.variant], device)
 
     # ------------------------------------------------------------------
     # 3. Selective weight transfer: copy any key whose name AND shape match
@@ -124,7 +126,7 @@ def main():
     torch.save({
         "variant":         args.variant,
         "step":            0,
-        "model_state":     target.state_dict(),
+        "model_state":     {k: v.cpu() for k, v in target.state_dict().items()},
         "optimizer_state": None,
         "scheduler_state": None,
         "val_log":         {},

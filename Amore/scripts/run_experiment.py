@@ -437,6 +437,46 @@ def build_variant_student(args, cfg, device):
 # Training loop for one variant
 # ---------------------------------------------------------------------------
 
+def _alpha_summary(student, cfg) -> str:
+    """Return a compact one-line string of α values grouped by Mamba span.
+
+    Example:  α  [.485 .467 .450 .446 .447 .451 .480 .461] | [.444 .460 ... .467] | [.467 ... .485]
+    The last value in each bracket is the layer just before an attention boundary.
+    """
+    gate_mode = cfg.get("gate_mode")
+    if gate_mode not in ("constant", "shared_beta"):
+        return ""
+
+    # Collect (layer_idx, alpha) for all Mamba layers in order
+    entries = []
+    for plan in student.layer_plan:
+        if plan["kind"] == "mamba":
+            wrapper = student.adapter.get_attention(student.layers[plan["layer_idx"]])
+            bg = wrapper.mamba
+            if gate_mode == "shared_beta":
+                a = torch.sigmoid(student.shared_beta * bg.depth + bg.gamma).item()
+            else:
+                a = torch.sigmoid(bg.gamma).item()
+            entries.append((plan["layer_idx"], a))
+
+    if not entries:
+        return ""
+
+    # Group into spans separated by attention boundaries
+    # A new span starts whenever layer indices are non-consecutive
+    spans, current = [], []
+    for i, (li, a) in enumerate(entries):
+        if i > 0 and li != entries[i - 1][0] + 1:
+            spans.append(current)
+            current = []
+        current.append(a)
+    if current:
+        spans.append(current)
+
+    span_strs = ["[" + " ".join(f"{a:.3f}" for a in s) + "]" for s in spans]
+    return "α  " + " | ".join(span_strs)
+
+
 def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, amp_dtype, effective_lr):
     """Train one variant. Returns dict of val losses keyed by step."""
     print(f"\n{'='*60}")
@@ -559,6 +599,9 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
             lr_now = scheduler.get_last_lr()[0]
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
                   f"train_ema={ema_loss:8.3f} | val={val_loss:8.3f} | lr={lr_now:.2e}")
+            summary = _alpha_summary(student, cfg)
+            if summary:
+                print(f"    [{name}] {summary}")
 
         elif step % args.log_every == 0 or step == 1:
             lr_now = scheduler.get_last_lr()[0]

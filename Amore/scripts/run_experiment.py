@@ -302,9 +302,12 @@ def load_checkpoint(path, name, student, optimizer, scheduler, args):
     state is restored so an interrupted run continues from where it left off.
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    student.load_state_dict(ckpt["model_state"])
     saved_step = ckpt.get("step", 0)
-    if saved_step > 0 and saved_step < args.steps:
+    is_crash_recovery = saved_step > 0 and saved_step < args.steps
+    # Crash recovery: strict=True (all keys must match exactly).
+    # Warm-start: strict=False so new parameters (e.g. 2A gates) keep fresh init.
+    student.load_state_dict(ckpt["model_state"], strict=is_crash_recovery)
+    if is_crash_recovery:
         # Crash-recovery: restore full training state
         optimizer.load_state_dict(ckpt["optimizer_state"])
         scheduler.load_state_dict(ckpt["scheduler_state"])

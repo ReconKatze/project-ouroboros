@@ -98,8 +98,8 @@ class BetaGated2AMamba(nn.Module):
     stats_accum is read and printed at each val step.
     """
 
-    _LAMBDA_T = 0.005   # temporal gate sparsity weight
-    _LAMBDA_B = 0.01    # block gate sparsity weight
+    _LAMBDA_T = 0.05    # temporal gate sparsity weight
+    _LAMBDA_B = 0.10    # block gate sparsity weight
 
     def __init__(
         self,

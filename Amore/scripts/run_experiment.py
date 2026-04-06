@@ -586,7 +586,7 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
         # Round 2A gate sparsity loss — accumulated by BetaGated2AMamba during forward
         gate2a_sparsity = getattr(student, "gate2a_sparsity_accum", [])
         if gate2a_sparsity:
-            loss = loss + sum(gate2a_sparsity) / len(gate2a_sparsity)
+            loss = loss + sum(gate2a_sparsity)
             gate2a_sparsity.clear()
 
         if not torch.isfinite(loss):

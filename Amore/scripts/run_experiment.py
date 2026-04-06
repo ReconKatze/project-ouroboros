@@ -311,9 +311,26 @@ def load_checkpoint(path, name, student, optimizer, scheduler, args):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     saved_step = ckpt.get("step", 0)
     is_crash_recovery = saved_step > 0 and saved_step < args.steps
-    # Crash recovery: strict=True (all keys must match exactly).
-    # Warm-start: strict=False so new parameters (e.g. 2A gates) keep fresh init.
-    student.load_state_dict(ckpt["model_state"], strict=is_crash_recovery)
+
+    if is_crash_recovery:
+        # Attempt strict crash recovery. Falls back to warm-start if the
+        # checkpoint was saved by an older code version that is missing new
+        # parameters (e.g. a B_psoft_2H checkpoint saved before H weights
+        # were correctly registered now being resumed after the H fix).
+        try:
+            student.load_state_dict(ckpt["model_state"], strict=True)
+        except RuntimeError as e:
+            if "Missing key" in str(e) or "Unexpected key" in str(e):
+                print(f"  [{name}] Key mismatch in checkpoint "
+                      f"(model has new params not in checkpoint, or vice versa). "
+                      f"Falling back to warm-start from step {saved_step} weights.")
+                student.load_state_dict(ckpt["model_state"], strict=False)
+                is_crash_recovery = False
+            else:
+                raise
+    else:
+        student.load_state_dict(ckpt["model_state"], strict=False)
+
     if is_crash_recovery:
         # Crash-recovery: restore full training state
         optimizer.load_state_dict(ckpt["optimizer_state"])

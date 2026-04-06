@@ -41,7 +41,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
 from chimera.models.hybrid_model import HybridChimeraModel
-from chimera.models.beta_mamba import BetaGatedMamba, PSoftMambaWrapper
+from chimera.models.beta_mamba import BetaGatedMamba, BetaGated2AMamba, PSoftMambaWrapper
 from chimera.utils.layer_plan import build_layer_plan, ATTN_KEEP_DEFAULTS
 
 
@@ -198,6 +198,13 @@ VARIANTS = {
         "gate_mode":    "constant",
         "psoft":        True,
         "label":        "Uniform (d=64) + constant gate + P_soft",
+    },
+    "B_psoft_2A": {
+        "d_state_spec": {"type": "uniform", "d": 64},
+        "gate_mode":    "constant",
+        "gate_2a":      True,
+        "psoft":        True,
+        "label":        "B_psoft + 2A temporal/block gates",
     },
     "D_bell2_32_psoft": {
         # Floor raised to 64: body=[64×6] + tail=[96,128] per span.
@@ -383,18 +390,35 @@ def build_variant_student(args, cfg, device):
 
     hybrid = HybridChimeraModel(base, layer_plan, num_sinks=4, device=str(device))
 
-    # Gate variants: wrap Mamba blocks with BetaGatedMamba BEFORE freeze
+    # Gate variants: wrap Mamba blocks with BetaGatedMamba (or 2A) BEFORE freeze
     gate_mode = cfg.get("gate_mode")
+    gate_2a   = cfg.get("gate_2a", False)
     if gate_mode in ("constant", "shared_beta"):
         total_mamba = sum(1 for p in hybrid.layer_plan if p["kind"] == "mamba")
         shared_beta = nn.Parameter(torch.zeros(1)) if gate_mode == "shared_beta" else None
+        d_model = base.config.hidden_size
+
+        if gate_2a:
+            hybrid.gate2a_sparsity_accum = []
+            hybrid.gate2a_stats_accum    = []
+
         mamba_idx = 0
         for plan in hybrid.layer_plan:
             if plan["kind"] == "mamba":
                 wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-                wrapper.mamba = BetaGatedMamba(
-                    wrapper.mamba, mamba_idx, total_mamba, shared_beta=shared_beta
-                )
+                if gate_2a:
+                    wrapper.mamba = BetaGated2AMamba(
+                        wrapper.mamba, mamba_idx, total_mamba,
+                        d_model=d_model,
+                        d_state=d_states[mamba_idx],
+                        sparsity_accum=hybrid.gate2a_sparsity_accum,
+                        stats_accum=hybrid.gate2a_stats_accum,
+                        shared_beta=shared_beta,
+                    )
+                else:
+                    wrapper.mamba = BetaGatedMamba(
+                        wrapper.mamba, mamba_idx, total_mamba, shared_beta=shared_beta
+                    )
                 mamba_idx += 1
         if shared_beta is not None:
             hybrid.register_parameter("shared_beta", shared_beta)
@@ -556,6 +580,12 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
             loss = loss + args.lambda_pc * loss_pc
             psoft_accum.clear()
 
+        # Round 2A gate sparsity loss — accumulated by BetaGated2AMamba during forward
+        gate2a_sparsity = getattr(student, "gate2a_sparsity_accum", [])
+        if gate2a_sparsity:
+            loss = loss + sum(gate2a_sparsity) / len(gate2a_sparsity)
+            gate2a_sparsity.clear()
+
         if not torch.isfinite(loss):
             print(f"  [{name}] Step {step}: NaN/Inf loss — stopping variant.")
             break
@@ -599,6 +629,12 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
             summary = _alpha_summary(student, cfg)
             if summary:
                 print(f"    [{name}] {summary}")
+            gate2a_stats = getattr(student, "gate2a_stats_accum", [])
+            if gate2a_stats:
+                mean_gt  = sum(s["g_time_mean"]    for s in gate2a_stats) / len(gate2a_stats)
+                mean_sil = sum(s["g_time_silence"] for s in gate2a_stats) / len(gate2a_stats)
+                print(f"    [{name}] g_time: mean={mean_gt:.3f}  silent={mean_sil*100:.1f}%")
+                gate2a_stats.clear()
 
         elif step % args.log_every == 0 or step == 1:
             lr_now = scheduler.get_last_lr()[0]

@@ -72,6 +72,100 @@ class BetaGatedMamba(nn.Module):
             self.mamba_block.init_from_attention(**kwargs)
 
 
+class BetaGated2AMamba(nn.Module):
+    """Round 2A: BetaGatedMamba + per-token and per-group input gates.
+
+    Measures whether the model wants to selectively suppress Mamba input
+    on a per-token (g_time) and per-feature-group (g_block) basis.
+
+    Gate design
+    -----------
+    g_time  [B, L, 1]        per-token scalar  — global write suppression
+    g_block [B, L, n_blocks] per-group gate    — structured feature sparsity
+    combined = g_time * expand(g_block) applied to input x before Mamba
+
+    n_blocks = d_state // 16.  For d_state=64: n_blocks=4, block_size = d_model//4.
+
+    Sparsity regularisation (prevents gates from staying at 0.5):
+        λ_t * g_time.mean() + λ_b * g_block.mean()   (λ_t=0.005, λ_b=0.01)
+
+    Go/no-go signal: ≥30% tokens silenced + clear block structure + depth-dependent
+    usage → proceed to multi-head SSM routing.  Everything on or everything off →
+    state capacity not a learnable prior at this scale.
+
+    sparsity_accum and stats_accum are mutable lists owned by the parent
+    HybridChimeraModel.  The training loop reads sparsity_accum each step;
+    stats_accum is read and printed at each val step.
+    """
+
+    _LAMBDA_T = 0.005   # temporal gate sparsity weight
+    _LAMBDA_B = 0.01    # block gate sparsity weight
+
+    def __init__(
+        self,
+        mamba_block: nn.Module,
+        mamba_idx: int,
+        total_mamba: int,
+        d_model: int,
+        d_state: int,
+        sparsity_accum: list,
+        stats_accum: list,
+        shared_beta: "nn.Parameter | None" = None,
+    ):
+        super().__init__()
+        self.mamba_block = mamba_block
+        self.depth = mamba_idx / max(total_mamba - 1, 1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+        object.__setattr__(self, "_shared_beta", shared_beta)
+
+        n_blocks   = max(1, d_state // 16)
+        block_size = d_model // n_blocks
+        self._n_blocks   = n_blocks
+        self._d_model    = d_model
+        self._block_size = block_size
+
+        self.W_t = nn.Linear(d_model, 1,        bias=True)
+        self.W_b = nn.Linear(d_model, n_blocks, bias=True)
+        # Init open: sigmoid(+2) ≈ 0.88 — starts near the ungated baseline.
+        nn.init.zeros_(self.W_t.weight)
+        nn.init.constant_(self.W_t.bias, 2.0)
+        nn.init.zeros_(self.W_b.weight)
+        nn.init.constant_(self.W_b.bias, 2.0)
+
+        self._sparsity_accum = sparsity_accum
+        self._stats_accum    = stats_accum
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        g_time  = torch.sigmoid(self.W_t(x))          # [B, L, 1]
+        g_block = torch.sigmoid(self.W_b(x))          # [B, L, n_blocks]
+
+        # Expand g_block: each of n_blocks values covers block_size input features
+        g_exp = g_block.repeat_interleave(self._block_size, dim=-1)
+        g_exp = g_exp[..., :self._d_model]             # trim if d_model % n_blocks != 0
+
+        out = self.mamba_block(g_time * g_exp * x)
+
+        if self._shared_beta is not None:
+            alpha = torch.sigmoid(self._shared_beta * self.depth + self.gamma)
+        else:
+            alpha = torch.sigmoid(self.gamma)
+
+        if self.training:
+            self._sparsity_accum.append(
+                self._LAMBDA_T * g_time.mean() + self._LAMBDA_B * g_block.mean()
+            )
+            self._stats_accum.append({
+                "g_time_mean":    g_time.detach().mean().item(),
+                "g_time_silence": (g_time.detach() < 0.1).float().mean().item(),
+            })
+
+        return alpha * out
+
+    def init_from_attention(self, **kwargs) -> None:
+        if hasattr(self.mamba_block, "init_from_attention"):
+            self.mamba_block.init_from_attention(**kwargs)
+
+
 class PSoftMambaWrapper(nn.Module):
     """Level 1 Predictive Coding (P_soft) wrapper around a BetaGatedMamba block.
 

@@ -199,6 +199,15 @@ VARIANTS = {
         "psoft":        True,
         "label":        "Uniform (d=64) + constant gate + P_soft",
     },
+    "D_bell2_32_psoft": {
+        # Floor raised to 64: body=[64×6] + tail=[96,128] per span.
+        # Only the 2 pre-attention layers per span get elevated d_state.
+        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 64, "d_max": 64,
+                         "tail": [96, 128]},
+        "gate_mode":    "constant",
+        "psoft":        True,
+        "label":        "Per-span d=64 + tail [96,128] + P_soft",
+    },
 }
 
 

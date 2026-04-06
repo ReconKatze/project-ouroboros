@@ -513,9 +513,6 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
         start_step, val_log, ema_loss, chunk_idx = load_checkpoint(
             args.resume, name, student, optimizer, scheduler, args
         )
-        # Replay LR scheduler to the correct position after a warm-start
-        for _ in range(start_step):
-            scheduler.step()
 
     # Checkpoint output path (save_dir/<name>_final.pt and mid-run)
     save_dir = args.save_dir

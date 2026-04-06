@@ -40,7 +40,7 @@ from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
-from chimera.models.hybrid_model import HybridChimeraModel
+from chimera.models.hybrid_model import HybridChimeraModel, MambaGuidedAttentionWrapper
 from chimera.models.beta_mamba import BetaGatedMamba, BetaGated2AMamba, PSoftMambaWrapper
 from chimera.utils.layer_plan import build_layer_plan, ATTN_KEEP_DEFAULTS
 
@@ -205,6 +205,13 @@ VARIANTS = {
         "gate_2a":      True,
         "psoft":        True,
         "label":        "B_psoft + 2A temporal/block gates",
+    },
+    "B_psoft_2H": {
+        "d_state_spec": {"type": "uniform", "d": 64},
+        "gate_mode":    "constant",
+        "psoft":        True,
+        "gate_h":       True,
+        "label":        "B_psoft + 2H Mamba-guided sparse attention",
     },
     "D_bell2_32_psoft": {
         # Floor raised to 64: body=[64×6] + tail=[96,128] per span.
@@ -438,6 +445,33 @@ def build_variant_student(args, cfg, device):
                     wrapper.mamba, d_model, loss_accum=hybrid.psoft_loss_accum
                 )
 
+    # Round 2H: Mamba-guided sparse attention
+    # Wraps attention layers (except layer 0) with MambaGuidedAttentionWrapper.
+    # Preceding Mamba reference is wired so each guided layer reads _last_out
+    # from the Mamba wrapper immediately before it in the layer sequence.
+    gate_h = cfg.get("gate_h", False)
+    if gate_h:
+        hybrid.h_align_accum = []
+        hybrid.h_stats_accum = []
+        hybrid.h_step_ref    = [0]   # updated by training loop before each forward
+
+        last_mamba = None
+        for plan in hybrid.layer_plan:
+            layer = hybrid.layers[plan["layer_idx"]]
+            if plan["kind"] == "mamba":
+                last_mamba = hybrid.adapter.get_attention(layer)
+            elif plan["kind"] == "attention" and last_mamba is not None:
+                orig_attn = hybrid.adapter.get_attention(layer)
+                guided = MambaGuidedAttentionWrapper(
+                    orig_attn,
+                    d_model=d_model,
+                    align_accum=hybrid.h_align_accum,
+                    stats_accum=hybrid.h_stats_accum,
+                    step_ref=hybrid.h_step_ref,
+                )
+                guided.preceding_mamba = last_mamba
+                hybrid.adapter.set_attention(layer, guided)
+
     # Freeze all, then unfreeze Mamba wrappers + sink tokens
     for p in hybrid.parameters():
         p.requires_grad_(False)
@@ -450,6 +484,14 @@ def build_variant_student(args, cfg, device):
     # shared_beta is registered on hybrid (not on any wrapper) — unfreeze explicitly
     if hasattr(hybrid, "shared_beta"):
         hybrid.shared_beta.requires_grad_(True)
+    # H: unfreeze only the relevance projections (original_attn stays frozen)
+    if gate_h:
+        for plan in hybrid.layer_plan:
+            if plan["kind"] == "attention":
+                wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
+                if isinstance(wrapper, MambaGuidedAttentionWrapper):
+                    wrapper.W_q_rel.weight.requires_grad_(True)
+                    wrapper.W_k_rel.weight.requires_grad_(True)
 
     hybrid = hybrid.to(device)
     hybrid.train()
@@ -561,6 +603,11 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
         input_ids = torch.stack(batch_chunks).to(device)   # [batch_size, seq_len]
         chunk_idx += args.batch_size
 
+        # Update H step counter before forward so MambaGuidedAttentionWrapper
+        # sees the correct phase (dense vs sparse)
+        if hasattr(student, "h_step_ref"):
+            student.h_step_ref[0] = step
+
         # Teacher forward
         with torch.no_grad():
             teacher_logits = teacher(input_ids=input_ids).logits
@@ -588,6 +635,12 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
         if gate2a_sparsity:
             loss = loss + sum(gate2a_sparsity)
             gate2a_sparsity.clear()
+
+        # Round 2H alignment loss — entropy reg on relevance distributions
+        h_align = getattr(student, "h_align_accum", [])
+        if h_align:
+            loss = loss + sum(h_align) / len(h_align)
+            h_align.clear()
 
         if not torch.isfinite(loss):
             print(f"  [{name}] Step {step}: NaN/Inf loss — stopping variant.")
@@ -638,6 +691,13 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
                 mean_sil = sum(s["g_time_silence"] for s in gate2a_stats) / len(gate2a_stats)
                 print(f"    [{name}] g_time: mean={mean_gt:.3f}  silent={mean_sil*100:.1f}%")
                 gate2a_stats.clear()
+            h_stats = getattr(student, "h_stats_accum", [])
+            if h_stats:
+                mean_ent = sum(s["entropy"] for s in h_stats) / len(h_stats)
+                phase    = h_stats[-1]["phase"]
+                label    = "dense" if phase == 0 else "sparse"
+                print(f"    [{name}] H: entropy={mean_ent:.3f}  ({label})")
+                h_stats.clear()
 
         elif step % args.log_every == 0 or step == 1:
             lr_now = scheduler.get_last_lr()[0]
@@ -720,8 +780,8 @@ def parse_args():
                         "model weights only (warm-start for Round 2).")
     p.add_argument("--checkpoint-every", type=int, default=2500,
                    help="Save mid-run checkpoint every N steps (0 = final only).")
-    p.add_argument("--lambda-pc",        type=float, default=0.1,
-                   help="P_soft prediction loss weight. Only used for B_psoft variant.")
+    p.add_argument("--lambda-pc",        type=float, default=0.01,
+                   help="P_soft prediction loss weight. 0.01 validated in B_psoft Run 2.")
     return p.parse_args()
 
 

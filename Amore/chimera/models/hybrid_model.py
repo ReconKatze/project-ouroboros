@@ -156,17 +156,197 @@ class MambaAttentionWrapper(nn.Module):
     the layer handles both.
 
     Returns a 2-tuple (output, None) matching attention's (output, kv_cache).
+
+    _last_out: detached copy of the Mamba output, set after every forward.
+    MambaGuidedAttentionWrapper reads this to obtain the relevance signal
+    without re-running or registering any backward hook.
     """
 
     def __init__(self, mamba_block: nn.Module):
         super().__init__()
         self.mamba = mamba_block
+        self._last_out = None   # [B, L, d_model], populated by forward()
 
     def forward(self, hidden_states, attention_mask=None, position_ids=None,
                 position_embeddings=None, past_key_values=None,
                 use_cache=False, **kwargs):
         output = self.mamba(hidden_states)
+        self._last_out = output.detach()
         return (output, None)
+
+
+# ---------------------------------------------------------------------------
+# Round 2H: Mamba-guided sparse attention
+# ---------------------------------------------------------------------------
+
+class MambaGuidedAttentionWrapper(nn.Module):
+    """Round 2H: replaces a standard attention module.
+
+    Learns to select the top-k most relevant key tokens using the output of
+    the preceding Mamba layer as a relevance prior.  Only W_q_rel / W_k_rel
+    are trained; the wrapped attention module stays frozen.
+
+    Training schedule (controlled by step_ref[0]):
+      Phase 0  (step < SPARSE_FROM):  Full attention.  W_q_rel / W_k_rel
+                                       are trained via entropy regularisation
+                                       on the relevance distribution.
+      Phase 1  (step >= SPARSE_FROM): Sparse attention — only top-K_FRAC
+                                       tokens are attended to per query.
+
+    Go/no-go: relevance entropy should decrease over time (distribution
+    concentrating) and top-k overlap with full-attention top-k ≥ 70%.
+
+    If preceding_mamba is None (e.g. the very first attention layer has no
+    Mamba layer before it), falls back to full attention with no relevance.
+    """
+
+    _D_REL       = 64     # relevance projection dimension
+    _K_FRAC      = 0.25   # fraction of tokens selected in sparse mode
+    _SPARSE_FROM = 2000   # step at which sparse attention activates
+    _LAMBDA_ENT  = 0.005  # entropy regularisation weight
+
+    def __init__(
+        self,
+        original_attn: nn.Module,
+        d_model: int,
+        align_accum: list,
+        stats_accum: list,
+        step_ref: list,
+    ):
+        """
+        Args:
+            original_attn: The frozen Qwen2 (or other) attention module.
+            d_model:       Model hidden size.
+            align_accum:   Shared mutable list; each forward appends one
+                           entropy-reg loss tensor (training loop sums them).
+            stats_accum:   Shared mutable list; each forward appends a dict
+                           with diagnostic scalars.
+            step_ref:      Single-element list [step] updated by training loop.
+        """
+        super().__init__()
+        self.original_attn   = original_attn
+        self.d_model         = d_model
+        self.preceding_mamba = None   # set by build_variant_student after init
+
+        d_rel = self._D_REL
+        self.W_q_rel = nn.Linear(d_model, d_rel, bias=False)
+        self.W_k_rel = nn.Linear(d_model, d_rel, bias=False)
+        # Small-norm init: relevance starts near-uniform, shaped gradually
+        nn.init.normal_(self.W_q_rel.weight, std=d_model ** -0.5)
+        nn.init.normal_(self.W_k_rel.weight, std=d_model ** -0.5)
+
+        self._align_accum = align_accum
+        self._stats_accum = stats_accum
+        self._step_ref    = step_ref
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _rel_scores(self, relevance: torch.Tensor) -> torch.Tensor:
+        """Causal relevance logits from Mamba output.
+
+        Args:
+            relevance: [B, L, d_model]
+        Returns:
+            scores: [B, L, L]  (future positions masked to -inf)
+        """
+        q = self.W_q_rel(relevance)                                  # [B, L, d_rel]
+        k = self.W_k_rel(relevance)                                  # [B, L, d_rel]
+        scores = (q @ k.transpose(-1, -2)) * (self._D_REL ** -0.5)  # [B, L, L]
+        L = scores.shape[1]
+        future = torch.triu(
+            torch.ones(L, L, device=scores.device, dtype=torch.bool), diagonal=1
+        )
+        return scores.masked_fill(future, float('-inf'))
+
+    def _sparse_mask(self, rel_scores: torch.Tensor) -> torch.Tensor:
+        """Additive sparse attention mask [B, 1, L, L].
+
+        Top-K_FRAC positions per query get 0.0 (pass through);
+        everything else gets -inf (blocked).  Diagonal always passes.
+        """
+        B, L, _ = rel_scores.shape
+        k = max(1, int(self._K_FRAC * L))
+        topk_idx = rel_scores.topk(k, dim=-1).indices          # [B, L, k]
+        mask = torch.full(
+            (B, 1, L, L), float('-inf'),
+            device=rel_scores.device, dtype=rel_scores.dtype
+        )
+        mask.scatter_(-1, topk_idx.unsqueeze(1), 0.0)
+        # Self-attention always allowed
+        diag = torch.arange(L, device=rel_scores.device)
+        mask[:, 0, diag, diag] = 0.0
+        return mask
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask=None,
+        position_ids=None,
+        position_embeddings=None,
+        **kwargs,
+    ):
+        step = self._step_ref[0]
+
+        # No relevance available (first layer or inference) → full attention
+        if (self.preceding_mamba is None
+                or self.preceding_mamba._last_out is None):
+            return self.original_attn(
+                hidden_states, attention_mask=attention_mask,
+                position_ids=position_ids,
+                position_embeddings=position_embeddings, **kwargs,
+            )
+
+        relevance  = self.preceding_mamba._last_out         # detached [B, L, d_model]
+        rel_scores = self._rel_scores(relevance)            # [B, L, L]
+
+        # Entropy regularisation — train W_q_rel / W_k_rel to produce
+        # peaked distributions (low entropy = strong token preferences)
+        if self.training:
+            valid    = rel_scores.isfinite()
+            safe     = rel_scores.masked_fill(~valid, -1e9)
+            probs    = torch.softmax(safe, dim=-1)
+            log_p    = torch.log_softmax(safe, dim=-1)
+            ent_tok  = -(probs * log_p * valid).sum(dim=-1)  # [B, L]
+            n_valid  = valid.float().sum(dim=-1).clamp(min=1)
+            # Normalise by log(n_valid) so early positions don't dominate
+            ent_norm = (ent_tok / n_valid.log().clamp(min=1e-9)).mean()
+            self._align_accum.append(self._LAMBDA_ENT * ent_norm)
+
+            with torch.no_grad():
+                raw_ent = ent_tok.mean().item()
+                phase   = 0 if step < self._SPARSE_FROM else 1
+                self._stats_accum.append({"entropy": raw_ent, "phase": phase})
+
+        if step >= self._SPARSE_FROM:
+            sparse = self._sparse_mask(rel_scores)          # [B, 1, L, L]
+            if attention_mask is not None:
+                combined = attention_mask + sparse
+            else:
+                B, L, _ = hidden_states.shape
+                causal = torch.triu(
+                    torch.full((1, 1, L, L), float('-inf'),
+                               device=hidden_states.device,
+                               dtype=hidden_states.dtype),
+                    diagonal=1,
+                )
+                combined = causal + sparse
+            return self.original_attn(
+                hidden_states, attention_mask=combined,
+                position_ids=position_ids,
+                position_embeddings=position_embeddings, **kwargs,
+            )
+        else:
+            return self.original_attn(
+                hidden_states, attention_mask=attention_mask,
+                position_ids=position_ids,
+                position_embeddings=position_embeddings, **kwargs,
+            )
 
 
 # ---------------------------------------------------------------------------

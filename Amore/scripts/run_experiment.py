@@ -477,7 +477,7 @@ def build_variant_student(args, cfg, device):
             layer = hybrid.layers[plan["layer_idx"]]
             if plan["kind"] == "mamba":
                 last_mamba = hybrid.adapter.get_attention(layer)
-            elif plan["kind"] == "attention" and last_mamba is not None:
+            elif plan["kind"] == "attn" and last_mamba is not None:
                 orig_attn = hybrid.adapter.get_attention(layer)
                 guided = MambaGuidedAttentionWrapper(
                     orig_attn,
@@ -514,7 +514,7 @@ def build_variant_student(args, cfg, device):
     # H: unfreeze only the relevance projections (original_attn stays frozen)
     if gate_h:
         for plan in hybrid.layer_plan:
-            if plan["kind"] == "attention":
+            if plan["kind"] == "attn":
                 wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
                 if isinstance(wrapper, MambaGuidedAttentionWrapper):
                     wrapper.W_q_rel.weight.requires_grad_(True)

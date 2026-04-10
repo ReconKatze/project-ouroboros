@@ -1,0 +1,14 @@
+# Local reference docs — kept on disk, not in repo
+CLAUDE.md
+ChatGPT responses.txt
+Expo5.txt
+Grok responses.txt
+project ouroboros.docx
+*.docx
+
+# Spec PDFs
+*.pdf
+
+# Codex/memory scratch files
+codex_memory.md
+.codex/

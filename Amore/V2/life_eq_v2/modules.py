@@ -76,14 +76,16 @@ class IdentityModule(nn.Module):
 
     def attractor_loss(self, state: FullState, gamma_eff: Optional[torch.Tensor] = None) -> torch.Tensor:
         """§2 v15: L_id = gamma_eff * ||h_id - I_0||². Basin loosens over lifetime."""
-        raw = (state.Z_id - state.I_0).abs().pow(2).mean()
+        diff = state.Z_id - state.I_0
+        raw = (diff.real.pow(2) + diff.imag.pow(2)).mean()
         if gamma_eff is None:
             # v2 fallback: fixed lambda_identity
             return self.config.lambda_identity * raw
         return (gamma_eff * raw).mean()
 
     def drift(self, state: FullState) -> torch.Tensor:
-        return (state.Z_id - state.I_0).abs().pow(2).mean(dim=(1, 2)).sqrt().unsqueeze(-1)
+        diff = state.Z_id - state.I_0
+        return (diff.real.pow(2) + diff.imag.pow(2)).mean(dim=(1, 2)).sqrt().unsqueeze(-1)
 
     def active_identity(self, state: FullState, social_context: torch.Tensor) -> torch.Tensor:
         logits = self.role_scale * (state.Z_id.real.mean(dim=-1) * social_context[:, : self.config.n_id_heads])
@@ -366,7 +368,7 @@ class HomeostasisModule(nn.Module):
     def forward(self, z_homeo: torch.Tensor, z_cog: torch.Tensor, z_eps: torch.Tensor, z_pfat: torch.Tensor, z_cap: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         current = torch.stack(
             [
-                z_cog.abs().mean(dim=(1, 2, 3)),
+                (z_cog.real.pow(2) + z_cog.imag.pow(2)).sqrt().mean(dim=(1, 2, 3)),
                 torch.full((z_cap.shape[0],), 0.5, device=z_cap.device),
                 z_eps.norm(dim=-1),
                 z_pfat.squeeze(-1),

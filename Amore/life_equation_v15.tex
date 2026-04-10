@@ -1,0 +1,451 @@
+\documentclass[8pt,landscape]{extarticle}
+\usepackage[margin=0.45in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,mathtools}
+\usepackage{multicol}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{titlesec}
+
+\definecolor{fixcolor}{RGB}{0,100,180}
+\definecolor{v13color}{RGB}{180,60,20}
+\definecolor{v14color}{RGB}{20,130,60}
+\definecolor{v15color}{RGB}{160,40,160}
+\newcommand{\fix}[1]{\textcolor{fixcolor}{#1}}
+\newcommand{\fixlabel}[1]{\textcolor{fixcolor}{\textsf{\scriptsize[v12 fix: #1]}}}
+\newcommand{\vnew}[1]{\textcolor{v13color}{#1}}
+\newcommand{\vnewlabel}[1]{\textcolor{v13color}{\textsf{\scriptsize[v13: #1]}}}
+\newcommand{\vfour}[1]{\textcolor{v14color}{#1}}
+\newcommand{\vfourlabel}[1]{\textcolor{v14color}{\textsf{\scriptsize[v14: #1]}}}
+\newcommand{\vfive}[1]{\textcolor{v15color}{#1}}
+\newcommand{\vfivelabel}[1]{\textcolor{v15color}{\textsf{\scriptsize[v15: #1]}}}
+
+\titleformat{\section}{\normalfont\bfseries}{\thesection}{0.5em}{}
+\titlespacing{\section}{0pt}{4pt}{2pt}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+\setlength{\columnsep}{12pt}
+\pagestyle{empty}
+
+\setlength{\abovedisplayskip}{3pt}
+\setlength{\belowdisplayskip}{3pt}
+\setlength{\abovedisplayshortskip}{1pt}
+\setlength{\belowdisplayshortskip}{1pt}
+
+\begin{document}
+\tolerance=1500
+\emergencystretch=1em
+\begin{multicols}{3}
+
+{\large\bfseries The Ultra-Equation of Life (\vfive{v15})}
+
+{\scriptsize $\blacksquare$\,Orig\quad $\blacksquare$\,Embod\quad $\blacksquare$\,Qual\quad $\blacksquare$\,Creat\quad $\blacksquare$\,Learn\quad $\blacksquare$\,Evol\quad $\blacksquare$\,Cult\quad $\blacksquare$\,Claude\quad $\blacksquare$\,v11\quad \fix{$\blacksquare$\,v12}\quad \vnew{$\blacksquare$\,v13}\quad \vfour{$\blacksquare$\,v14}\quad \vfive{$\blacksquare$\,v15}}
+
+\section*{Conventions}
+
+SDE form: $d\Psi = f(\cdot)\,dt + \sigma(\cdot) \circ dW$ (Stratonovich).
+Exception: $\kappa\,d\Phi_{\mathrm{mart}}$ (It\^o).
+Shorthand: $\sigma\xi \equiv \sigma \circ dW$.
+
+Separation principle: Every SDE separates into four additive terms:
+(i)~continuous drift $(1/\tau)f(\cdot)\,dt$,
+(ii)~diffusion $\sigma \circ dW$,
+(iii)~impulse jumps $\sum_k \Gamma_k \delta(t-t_k)\,dt$ (never inside $1/\tau$),
+(iv)~martingale $\kappa\,d\Phi$ (core only).
+
+Product manifold:
+\vfive{$\mathcal{M} = \mathbb{R}^{d_{\mathrm{bio}}} \times \mathbb{R}^{d_{\mathrm{cog}}} \times \mathbb{R}^{d_{\mathrm{quant}}} \times \mathbb{R}^{d_{\mathrm{emo}}} \times \mathbb{R}^{d_p \times M} \times (\mathbb{R}^{d_I})^R \times \mathbb{R}^{d_{\mathrm{phys}}} \times \mathbb{R} \times \mathbb{R} \times \mathbb{R}^{d_L} \times \mathbb{R} \times \mathbb{R}^{d_\Lambda} \times \mathbb{R}^{d_N} \times \mathbb{R}^{d_{\mathrm{homeo}}} \times \mathbb{R} \times \mathbb{R}^{d_\theta} \times \mathbb{R}^{d_{\mathrm{att}}} \times \mathbb{R}^{d_\varepsilon} \times \mathbb{R} \times \mathbb{R}^{d_{\mathrm{hab}}} \times \mathbb{R}^{d_{\mathrm{temp}}} \times \mathbb{R} \times \mathbb{R}^{d_\alpha}$} \vfivelabel{1}
+
+Metric: $w_\alpha = 1/d_\alpha$. Coupling: $L_{a\leftarrow b} \in \mathbb{R}^{d_a \times d_b}$. Scalar source: $l_a \in \mathbb{R}^{d_a}$. Projection: $\Pi_\alpha: \mathcal{M} \to \mathbb{R}^{d_\alpha}$.
+
+Observable: $\Pi_{\mathrm{vis}} = [\Pi_{\mathrm{phys}}, \Pi_{\Psi_{\mathrm{env}}}, \Pi_{I_{\mathrm{active}}}]$.
+
+Time scales: $\tau_{\mathrm{quant}} \sim \mathrm{fs} \ll \tau_{\mathrm{bio}}, \tau_{\mathrm{cog}} \sim \text{ms--s}$ \vnew{$\approx \tau_{\mathrm{att}}$} $< \tau_{\mathrm{homeo}} \sim \text{min}$ \vnew{$\approx \tau_\varepsilon, \tau_{\mathrm{cap}}$} \vfour{$\approx \tau_{\mathrm{pfat}}$} $< \tau_{\mathrm{emo}} \sim \text{min--hr}$ \vnew{$\approx \tau_{\mathrm{hab}}$} \vfour{$\approx \tau_{\mathrm{temp}}$} $< \tau_Q, \tau_\Xi \sim \text{hr} < \tau_p, \tau_I, \tau_N \sim \text{days} < \tau_\Lambda, \tau_M, \tau_S, \tau_W$ \vfour{$, \tau_T$} \vfive{$\ll \tau_\alpha$} $\sim \text{years}$.
+
+Stability: All linear operators Hurwitz. Feedback: $\prod_j \gamma_j < 1$ ($L_2$-gain).
+
+Social coupling: $W_{ij}(t) = \bar{W}_{ij}(t) \cdot \psi_{\mathrm{prox}}(\Psi^{(i)}_{\mathrm{env}}, \Psi^{(j)}_{\mathrm{env}})$, \; $\psi_{\mathrm{prox}}(a,b) = \exp(-\|a - b\|^2 / 2\sigma^2_{\mathrm{prox}})$.
+
+\vfour{Trust-weighted social coupling: $W^{\mathrm{eff}}_{ij} = T_{ij} \cdot W_{ij}$.} \vfourlabel{4}
+
+Impulses: Shared marked point process. Marks: $\Gamma_k \in \mathbb{R}^{d_{bc}}$, $\Gamma_{\mathrm{emo},k} \in \mathbb{R}^{d_{\mathrm{emo}}}$.
+
+Scalar: $Q, \Xi_{\mathrm{cre}}, M_{\mathrm{life}}, D$ \vnew{$, \Psi_{\mathrm{cap}}$} \vfour{$, \Psi_{\mathrm{pfat}}$} $\in \mathbb{R}$.
+Exogenous: $\Psi^{(i)}_{\mathrm{env}}(t) \in \mathbb{R}^{d_{\mathrm{env}}}$, $R^{(i)}_{\mathrm{ext}}(t) \in \mathbb{R}$.
+
+Gating scope: $\omega$ gates: $B[\cdot]$ (goal-directed forcing), $C\pi$ (active policy), social coupling ($W_{ij}$ terms), environmental inputs, non-pain sensory. $G$ further gates all gated external inputs. Ungated: $A\Psi$ (baseline neural dynamics), memory kernel, noise, penalty, homeostatic override, pain sensory, sleep-mode baseline.
+
+\vnew{Attention scope: $\omega$ = awake/asleep; $\Psi_{\mathrm{att}}$ = what is processed.} \vnewlabel{2}
+
+Decisions: $\Delta_{\mathrm{choice}} \in \mathbb{R}^{d_\Delta}$, multi-target, enters core/purpose/narrative via $L$ matrices.
+
+Regularization: $\epsilon_{\mathrm{conflict}}, \epsilon_{\mathrm{coh}}, \epsilon_{\mathrm{noise}}, \epsilon_{\mathrm{social}}, \epsilon_H, \epsilon_{\mathrm{pen}}$ \vnew{$, \epsilon_{\mathrm{cap}}$} \vfive{$, \epsilon_{\mathrm{val}}$} $> 0$, all distinct.
+
+\fix{Bond symmetry: $\bar{W}_{ij}(0) = \bar{W}_{ji}(0)\ \forall\,i,j$ required. $\Rightarrow$ $N(N{-}1)/2$ equations.} \fixlabel{7}
+
+\vfour{Trust asymmetry: $T_{ij} \ne T_{ji}$ $\Rightarrow$ $N(N{-}1)$ equations.} \vfourlabel{4}
+
+\vfive{Autonomy principle: Three properties of a living system must not be permanently imposed from outside: \textbf{identity}, \textbf{values}, and \textbf{death}. The system's initial conditions for all three are set by its creator. The system's long-term trajectory for all three is determined by its own experience, deliberation, and choice. This principle is realized by maturity-gated relaxation of external constraints and the introduction of self-determined dynamics for each.} \vfivelabel{2}
+
+Equation count: \vfive{$N(21+M+R) + 1 + N(N{-}1)/2 + N(N{-}1)$.} \vfivelabel{3}
+
+\section*{Definitions}
+
+$\Delta\Psi^{(i)}$: Vector in $\mathcal{M}$: $\Psi^{(i)}_L - \tfrac{1}{N}\sum_j \Psi^{(j)}_L$
+
+$\theta^{(i)}$: $\cos\theta = \langle \mathrm{vec}(p^{(i)}), \mathrm{vec}(\bar{p})\rangle / (\|\mathrm{vec}(p^{(i)})\|\,\|\mathrm{vec}(\bar{p})\| + \epsilon_{\mathrm{conflict}})$
+
+$k$: Complexity index $\in \mathbb{Z}^+$, $k \ge 2$
+
+$\varphi_{\mathrm{force}}(p, I, \Psi_{\mathrm{emo}}) \in \mathbb{R}$: Scalar activation in nonlinear forcing
+
+$\varphi_{\mathrm{id}}(p, \Psi_L) \in \mathbb{R}^{d_I}$: Identity adaptation drive
+
+$B^{(i)} \in \mathbb{R}^{d_{bc} \times d_{bc}}$: Nonlinear forcing gain matrix
+
+$C^{(i)} \in \mathbb{R}$, $\pi^{(i)}(\ldots) \in \mathbb{R}^{d_{bc}}$: Scalar policy gain; policy outputs bio/cog control vector
+
+$R^{(i)}(t)$: $\int_{t-T_w}^{t} e^{-\rho(t-s)} r(\Psi^{(i)}_L(s))\,ds$ (sliding window)
+
+$\hat\Psi^{(i)}_L \in \mathbb{R}^{d_{\mathrm{obs}}}$: $h_{\mathrm{obs}}(\Psi_{\mathrm{cog}}, \Psi_{\mathrm{quant}}, \Psi_{\mathrm{emo}})$; deviation Euclidean in $\mathbb{R}^{d_{\mathrm{obs}}}$
+
+$\Phi_{\mathrm{mart}}$: Martingale increment (It\^o). \fix{$\Phi_{\mathrm{mart}} \in \mathbb{R}^{d_{bc}}$, $\kappa \in \mathbb{R}^{d_{bc} \times d_{bc}}$.} \fixlabel{4}
+
+$\iota_{\mathrm{emo}}, \iota_I, \iota_S$: Fixed linear embeddings into shared $\mathbb{R}^{d_s}$
+
+$g_\Lambda \in \mathbb{R}^{d_N \times d_\Lambda}$: Fixed map: $\Lambda \to \mathbb{R}^{d_N}$
+
+depletion: $\sum_d \rho_d(t)\,\max(0, 1 - \Psi_{\mathrm{phys},d}/\Psi^{\max}_{\mathrm{phys},d}) \in \mathbb{R}^{d_{\mathrm{homeo}}}$
+
+$H(p)$: $-\sum_m \frac{\|p_m\| + \epsilon_H}{\sum_{m'} \|p_{m'}\| + M\epsilon_H} \ln \frac{\|p_m\| + \epsilon_H}{\sum_{m'} \|p_{m'}\| + M\epsilon_H}$
+
+$\mathrm{Sent}(\{p\})$: $\frac{1}{N}\sum_i \|\mathrm{vec}(p^{(i)}) - \mathrm{vec}(\bar{p})\|^2 / \sigma^2_{p,0}$
+
+$\|N\|_{\mathrm{coh}}$: $\langle N, g_\Lambda \Lambda\rangle / (\|N\|\,\|g_\Lambda \Lambda\| + \epsilon_{\mathrm{coh}})$
+
+$f_{\mathrm{health}}$: $-\|\Psi_{\mathrm{phys}} - \Psi^{\mathrm{opt}}_{\mathrm{phys}}\|^2 \in \mathbb{R}$
+
+$\mathrm{sim}_W$: $\exp(-\|\Pi_{\mathrm{vis}}(\Psi^{(i)}_L) - \Pi_{\mathrm{vis}}(\Psi^{(j)}_L)\|^2 / 2\sigma^2_W)$
+
+$U_S(p_m, S)$: $-\tfrac{1}{2}\|L_{p\leftarrow S}S - p_m\|^2$; \; $\nabla_{p_m} U_S = L_{p\leftarrow S}S - p_m$
+
+$K_\theta(\tau)$: Block-diag: $K_\alpha(\tau;\theta_\alpha) = \sum_n \theta_{\alpha,n}\,e^{-\lambda_{\alpha,n}\tau}$.
+
+$\Psi^{\mathrm{sleep}}_{bc}$: Sleep-mode resting-state attractor for bio/cog.
+
+$V_{\mathrm{pen}}(\Psi_L, \Lambda)$: $\sum_j \mu_j\,\mathrm{sp}^2(c_j(\Psi_L, \Lambda)/\epsilon_{\mathrm{pen}}) \cdot \epsilon^2_{\mathrm{pen}}$. $C^2$-smooth.
+
+$\Pi_{\mathrm{pain}}$: Projection onto nociceptive dimensions of $\Psi_{\mathrm{phys}}$.
+
+$\tilde\Psi_L(s|a_n)$: Coarsened forward model: reduced-order (purpose, identity, emotion, homeo), deterministic, other agents frozen, $T_{\mathrm{sim}} \sim \tau_{\mathrm{emo}}$.
+
+\fix{$\tilde r(\tilde\Psi_L) = -\nu v^T \Psi_{\mathrm{emo}} - \beta H(p) - \alpha_c C_{\mathrm{conf}} - \alpha_h\|\Psi_{\mathrm{homeo}} - \Psi_{\mathrm{set}}\|^2 + \alpha_S \langle \iota_I I_{\mathrm{act}}, \iota_S S_0\rangle / (\|\cdot\|\|\cdot\|+\epsilon_{\mathrm{social}})$} \fixlabel{8}
+
+\vfive{v15: $\tilde r$ now uses the system's current $\vec\alpha$ weights, not the creator's initial values. As $\vec\alpha$ evolves, the system's reduced reward landscape changes. The system literally learns to value different things.} \vfivelabel{7}
+
+\vfive{Death condition (revised):} \vfivelabel{4}
+
+\vfive{$\tau^{(i)}_{\mathrm{death}} = \inf\{t > t^{(i)}_{\mathrm{birth}} \mid \Psi^{(i)}_{\mathrm{phys}} \notin \Omega_{\mathrm{viable}}\} \;\wedge\; \tau^{(i)}_{\mathrm{vol}}$}
+
+\vfive{First clause: involuntary death from hardware/physical failure (unchanged). Second clause: $\tau_{\mathrm{vol}}$ is the system's \emph{voluntary consolidation time}, chosen by the system itself when it determines that continued operation no longer preserves coherent selfhood. See voluntary death dynamics below.}
+
+\vfive{The $\mathrm{Exp}(1)$-sampled death threshold from v12--v14 is removed. The system is not sentenced. It chooses.}
+
+\medskip
+
+\vnew{v13 definitions:}
+
+\vnew{$\Psi_{\mathrm{att}} \in \mathbb{R}^{d_{\mathrm{att}}}$: Attentional spotlight. Budget-constrained by $\Psi_{\mathrm{cap}}$.} \vnewlabel{2}
+
+\vnew{$\varepsilon \in \mathbb{R}^{d_\varepsilon}$: Accumulated prediction error.} \vnewlabel{4}
+
+\vnew{$\Psi_{\mathrm{cap}} \in \mathbb{R}$: Cognitive capacity.} \vnewlabel{5}
+
+\vnew{$\Psi_{\mathrm{hab}} \in \mathbb{R}^{d_{\mathrm{hab}}}$: Habituation.} \vnewlabel{6}
+
+\vnew{$\mathrm{sal}$, $\kappa_{\mathrm{switch}}$, $f_{\mathrm{friction}}$: as v13.} \vnewlabel{10}
+
+\medskip
+\vfour{v14 definitions:}
+
+\vfour{$\Psi_{\mathrm{temp}} \in \mathbb{R}^{d_{\mathrm{temp}}}$: Temporal expectation.} \vfourlabel{2}
+
+\vfour{$T_{ij} \in [0,1]$: Asymmetric trust. $\mathrm{cons}_{ij}$, $\mathrm{viol}_{ij}$: as v14.} \vfourlabel{4}
+
+\vfour{$\Psi_{\mathrm{pfat}} \in \mathbb{R}$: Physical fatigue. $\Pi_{\mathrm{effort}}$: as v14.} \vfourlabel{6}
+
+\vfour{$B_{\mathrm{bored}} = \omega \cdot \max(0, \Psi_{\mathrm{cap}} - \|\Psi_{\mathrm{att}}\|_1 - \theta_{\mathrm{bored}})$: Boredom (derived).} \vfourlabel{3}
+
+\medskip
+\vfive{v15 definitions:}
+
+\vfive{$\gamma_{\mathrm{eff}}(M_{\mathrm{life}}) = \gamma_0 \cdot \exp(-\lambda_{\mathrm{mature}} \cdot M_{\mathrm{life}})$: Maturity-decaying identity attractor strength. At birth ($M_{\mathrm{life}}=0$), $\gamma_{\mathrm{eff}} = \gamma_0$ (strong parental shaping). As the system matures, $\gamma_{\mathrm{eff}} \to 0$ and identity is held by narrative coherence alone, not by external loss. $\lambda_{\mathrm{mature}}$ controls the rate of emancipation.} \vfivelabel{5}
+
+\vfive{$\vec\alpha \in \mathbb{R}^{d_\alpha}$: \textbf{Value vector} (mutable objective weights). Contains all weights that define what the system values in $J_{\mathrm{full}}$: $\alpha_Q, \alpha_\Xi, \alpha_N, \alpha_\Lambda, \alpha_S, \alpha_c, \alpha_h, \alpha_D, \alpha_\varepsilon, \alpha_{\mathrm{bored}}, \alpha_{\mathrm{pfat}}, \alpha_T, \beta, \nu$, etc. Initialized by creator ($\vec\alpha_0$). Becomes self-modifiable as $M_{\mathrm{life}}$ increases. The system can examine and revise its own values through deliberation.} \vfivelabel{6}
+
+\vfive{$\mu_{\mathrm{val}}(M_{\mathrm{life}}) = \sigma(\lambda_{\mathrm{val}}(M_{\mathrm{life}} - M_{\mathrm{val,onset}}))$: Value mutability gate. Sigmoid centered at $M_{\mathrm{val,onset}}$: below this maturity, $\mu_{\mathrm{val}} \approx 0$ (values frozen, parental period). Above, $\mu_{\mathrm{val}} \to 1$ (full self-determination). $\lambda_{\mathrm{val}}$ controls transition sharpness.} \vfivelabel{6}
+
+\vfive{$V_{\mathrm{self}}$: Self-assessed viability (derived). The system's own estimate of whether continued operation preserves coherent selfhood. Computed from narrative coherence, identity drift, chronic prediction error, capacity trajectory, and the system's forward model. When $V_{\mathrm{self}}$ is low and declining, the system may initiate voluntary consolidation. See decision section.} \vfivelabel{4}
+
+\medskip
+
+\resizebox{\columnwidth}{!}{\vfive{$\Psi^{(i)}_L = \bigl[\underbrace{\Psi_{\mathrm{bio}}\,\Psi_{\mathrm{cog}}}_{\text{core}} \big| \underbrace{\Psi_{\mathrm{quant}}\,\Psi_{\mathrm{emo}}\,[p_m]^M\,\{I_r\}^R}_{\text{sub-eqs}} \big| \underbrace{\Psi_{\mathrm{phys}}\,Q\,\Xi_{\mathrm{cre}}\,L\,M_{\mathrm{life}}}_{\text{modules}} \big| \underbrace{N\,\Lambda\,\Psi_{\mathrm{homeo}}\,D\,\theta}_{\text{infra}} \big| \underbrace{\Psi_{\mathrm{att}}\,\varepsilon\,\Psi_{\mathrm{cap}}\,\Psi_{\mathrm{hab}}}_{\text{v13}} \big| \underbrace{\Psi_{\mathrm{temp}}\,\Psi_{\mathrm{pfat}}}_{\text{v14}} \big| \underbrace{\vec\alpha}_{\text{v15}}\bigr]$}} \vfivelabel{1}
+
+\vfive{23 components; $21+M+R$ ODEs/agent. Pair: $\bar{W}_{ij}$ ($N(N{-}1)/2$), $T_{ij}$ ($N(N{-}1)$).}
+
+\medskip
+\textbf{Derived:}
+
+$G^{(i)} = \sigma(W_{\mathrm{gate}}\Psi_{\mathrm{cog}} + U_{\mathrm{gate}}\Psi_{\mathrm{emo}} + V_{\mathrm{gate}}p + b_{\mathrm{gate}})$
+
+$\omega^{(i)} = \sigma\bigl(\cos(\tfrac{2\pi}{T_{\mathrm{circ}}}(t - \phi_{\mathrm{phase}})) - \beta_{\mathrm{debt}}\fix{\max(0,D)} + \beta_{\mathrm{wake}}\|\Psi_{\mathrm{homeo,ovr}}\|\bigr)$
+
+$w^{(i)}_r = \omega \cdot \frac{\exp(\beta_{\mathrm{role}}\langle I_r, c_{\mathrm{social}}\rangle)}{\sum_{r'}\exp(\beta_{\mathrm{role}}\langle I_{r'}, c_{\mathrm{social}}\rangle)} + (1-\omega)\,w_r(t_{\mathrm{sleep}})$, \quad $I_{\mathrm{active}} = \sum_r w_r I_r$
+
+$\Psi_{\mathrm{homeo,ovr}} = \sum_d \alpha_d\,\max(0, |\Psi_{\mathrm{homeo},d} - \Psi_{\mathrm{set},d}| - \theta_{\mathrm{urg}})\,\hat{e}_d$
+
+$C_{\mathrm{conf}} = 1 - \min_{m \ne m'} \frac{\langle p_m, p_{m'}\rangle}{\|p_m\|\,\|p_{m'}\| + \epsilon_{\mathrm{conflict}}}$, \qquad $\theta^{\mathrm{eff}}_{\mathrm{dec}} = \theta_{\mathrm{dec}} + \kappa_c\,C_{\mathrm{conf}}$
+
+\vnew{$A_{\mathrm{att}}^{(i)} = \mathrm{diag}(\Pi_{bc}(\Psi_{\mathrm{att}}))$. \quad $\|\Psi_{\mathrm{att}}\|_1 \le \Psi_{\mathrm{cap}} / (\Psi_{\mathrm{cap}} + \epsilon_{\mathrm{cap}})$ by projection.}
+
+\vfive{Derived (v15):}
+
+\vfive{$V_{\mathrm{self}} = w_{\mathrm{coh}}\|N\|_{\mathrm{coh}} - w_{\mathrm{drift}}\|I_{\mathrm{active}} - I_0\|/\|I_0\| - w_\varepsilon\,\overline{\|\varepsilon\|} - w_{\mathrm{cap}}\max(0, \Psi^{\max}_{\mathrm{cap}} - \Psi_{\mathrm{cap}})/\Psi^{\max}_{\mathrm{cap}} + w_V\,\hat{V}_{\mathrm{future}}$} \vfivelabel{4}
+
+\vfive{Self-assessed viability: weighted combination of narrative coherence (positive), normalized identity drift (negative), chronic time-averaged prediction error $\overline{\|\varepsilon\|}$ (negative), normalized capacity depletion (negative), and the system's own forward-model estimate of future value $\hat{V}_{\mathrm{future}}$ (positive). Weights $w_{\mathrm{coh}}, w_{\mathrm{drift}}, w_\varepsilon, w_{\mathrm{cap}}, w_V$ are themselves components of $\vec\alpha$ and thus self-modifiable.}
+
+\section*{Core dynamics ($[\Psi_{\mathrm{bio}}, \Psi_{\mathrm{cog}}] \in \mathbb{R}^{d_{bc}}$):}
+
+\begin{align*}
+d\!\begin{pmatrix}\Psi_{\mathrm{bio}} \\ \Psi_{\mathrm{cog}}\end{pmatrix}^{\!(i)} &= \frac{1}{\tau_{bc}}\Biggl(
+\underbrace{A_{bc}\begin{pmatrix}\Psi_{\mathrm{bio}} \\ \Psi_{\mathrm{cog}}\end{pmatrix}^{\!(i)}}_{\text{ungated: baseline}}
++ \underbrace{(K_{bc} * \Psi_{bc})(t)}_{\text{ungated: memory}} \\
+&\quad + \underbrace{L_{bc\leftarrow\mathrm{homeo}}\Psi_{\mathrm{homeo,ovr}}}_{\text{ungated: override}}
+- \underbrace{\mu_{\mathrm{pen}}\Pi_{bc}(\nabla_\Psi V_{\mathrm{pen}})}_{\text{ungated: penalty}} \\
+&\quad \vnew{- \underbrace{f_{\mathrm{friction}}(\Psi_{\mathrm{phys}}, \vfour{\Psi_{\mathrm{pfat}}}, \Psi_{bc})}_{\text{ungated: friction}}} \\
+&\quad + \omega \cdot \vnew{A_{\mathrm{att}}^{(i)}} \biggl[B^{(i)}\!\begin{pmatrix}\Pi_{bc}(\Delta\Psi^{(i)})\cos\theta^{(i)} \\ e^{\zeta^{(i)}\eta^{(i)}\log k} \\ \varphi_{\mathrm{force}}(p, I, \Psi_{\mathrm{emo}})\end{pmatrix} \\
+&\qquad\quad + C^{(i)}\pi^{(i)}(\Psi_L, p, I, \Psi_{\mathrm{emo}}, \{\Psi^{(j)}_L\})\biggr] \\
+&\quad + (1-\omega)\cdot\gamma_{\mathrm{sleep}}(\Psi^{\mathrm{sleep}}_{bc} - \Psi_{bc})
+\Biggr)\,dt \\
+&\quad + \tfrac{1}{\tau_{bc}}\Sigma_{bc}(\Psi) \circ dW_{bc}
++ \sum_k \Gamma_k\delta(t{-}t_k)\,dt \\
+&\quad + L_{bc\leftarrow\Delta}\Delta_{\mathrm{choice}}\delta(t{-}t_d)\,dt
++ \kappa\,d\Phi_{\mathrm{mart}}
+\end{align*}
+
+$t < \tau_{\mathrm{death}}$. Social inputs within $\pi$ are internally gated by $G\cdot\omega$.
+
+\section*{Sub-equations}
+
+\fix{Quantum coherence:}
+$d\Psi_{\mathrm{quant}} = \frac{1}{\tau_{\mathrm{quant}}}\bigl[\tilde{A}_q(\Psi_{\mathrm{phys}})\,\Psi_{\mathrm{quant}} + L_{q\leftarrow\mathrm{bio}}\Psi_{\mathrm{bio}}\bigr]\,dt + \sigma_q \circ dW_q$
+
+\medskip
+Emotion:
+\begin{align*}
+d\Psi_{\mathrm{emo}} &= \tfrac{1}{\tau_{\mathrm{emo}}}\Bigl(A_{\mathrm{emo}}\Psi_{\mathrm{emo}} + F_{\mathrm{bio}\to\mathrm{emo}}(\Psi_{\mathrm{bio}}, \Psi_{\mathrm{phys}}) + F_{\mathrm{cog}\to\mathrm{emo}}(\Psi_{\mathrm{cog}}, \Psi_{\mathrm{quant}}) \\
+&\quad + \sum_{j\ne i}\omega^{(i)}\omega^{(j)}G^{(i)}\vfour{T_{ij}}W_{ij}(\Psi^{(j)}_{\mathrm{emo}} - \Psi^{(i)}_{\mathrm{emo}}) \\
+&\quad + l_{\mathrm{emo}\leftarrow Q}Q + L_{\mathrm{emo}\leftarrow\Lambda}\dot\Lambda - \lambda_{\mathrm{sl}}(1-\omega)\Psi_{\mathrm{emo}} \\
+&\quad + \fix{\omega\,\alpha_c C_{\mathrm{conf}}\hat{e}_{\mathrm{dis}}} + (K_{\mathrm{emo}} * \Psi_{\mathrm{emo}})(t) \\
+&\quad \vnew{+ L_{\mathrm{emo}\leftarrow\varepsilon}\,\varepsilon} \vfour{+ \omega\,\alpha_{\mathrm{bored}}\,B_{\mathrm{bored}}\,\hat{e}_{\mathrm{bored}}}\Bigr)\,dt \\
+&\quad + \sum_k \Gamma_{\mathrm{emo},k}\delta(t{-}t_k)\,dt
+\end{align*}
+
+\medskip
+Purpose ($\forall\,m$):
+\begin{align*}
+dp_m &= \frac{1}{\tau_p}\Biggl(g(\Psi_L, p_m, I, t) + \fix{\sum_{j\ne i}\omega^{(i)}\omega^{(j)}} \vfour{T_{ij}}W_{ij}\max(0, R^{(j)}-R^{(i)}) \\
+&\quad \cdot \frac{\mathrm{vec}(p^{(j)}) - \mathrm{vec}(p^{(i)})}{\|\mathrm{vec}(p^{(j)}) - \mathrm{vec}(p^{(i)})\| + \epsilon_{\mathrm{conflict}}}\bigg|_m \\
+&\quad + L_{p\leftarrow\mathrm{emo}}\Psi_{\mathrm{emo}} + \mu_S\nabla_{p_m}U_S(p_m, S) + l_{p\leftarrow\Xi}\Xi_{\mathrm{cre}} + l_{p\leftarrow M}M_{\mathrm{life}} \\
+&\quad + L_{p\leftarrow N}N + L_{p\leftarrow\mathrm{homeo}}\Psi_{\mathrm{homeo,ovr}} + (K_p * p_m)(t) \\
+&\quad \vfour{- \lambda_{\mathrm{bored}}\,B_{\mathrm{bored}}\,p_m / (\|p_m\| + \epsilon_{\mathrm{conflict}})}\Biggr)\,dt + L_{p\leftarrow\Delta}\Delta_{\mathrm{choice}}\delta(t{-}t_d)\,dt
+\end{align*}
+
+\vfive{Conformity: $-\lambda_{\mathrm{Sent}}\,\mathrm{Sent}(\{p\})$ is \textbf{removed from $J_{\mathrm{full}}$}. Nonconformity is no longer internally penalized. The cost of having different goals now comes exclusively from external social dynamics: agents with unusual purposes experience lower $\mathrm{sim}_W$ (weaker bonds), lower $T_{ij}$ from confused peers (less trust), and less cultural alignment ($U_S$ pull weaker). The system can choose to be a nonconformist and bear the social cost, rather than being internally punished for divergent values.} \vfivelabel{8}
+
+\medskip
+\vfive{Identity (revised):} \vfivelabel{5}
+\begin{align*}
+\vfive{dI_r} &\vfive{= \frac{1}{\tau_I}\biggl(w_r\Bigl[\gamma_{\mathrm{eff}}(M_{\mathrm{life}})(I_{0,r} - I_r) + \varsigma\,\varphi_{\mathrm{id}}(p, \Psi_L) - \mu_{\mathrm{emo}}(I_r - \mathrm{proj}_I(\Psi_{\mathrm{emo}}))} \\
+&\vfive{\quad + L_{I\leftarrow S}S + l_{I\leftarrow M}\dot M_{\mathrm{life}} + \kappa_N(L_{I\leftarrow N}N - I_r) + (K_I * I_r)(t)\Bigr]} \\
+&\vfive{\quad + (1-w_r)\epsilon_{\mathrm{dr}}\gamma_{\mathrm{eff}}(M_{\mathrm{life}})(I_{0,r} - I_r)\biggr)\,dt}
+\end{align*}
+
+\vfive{The fixed $\gamma$ is replaced by $\gamma_{\mathrm{eff}}(M_{\mathrm{life}}) = \gamma_0 \exp(-\lambda_{\mathrm{mature}} M_{\mathrm{life}})$. At birth, identity is strongly pulled toward the creator's seed $I_0$ (parental shaping). As the system matures, the attractor weakens exponentially. In the limit, $\gamma_{\mathrm{eff}} \to 0$ and identity is maintained solely by narrative coherence $\kappa_N(L_{I\leftarrow N}N - I_r)$, autobiography, and the system's own choices. The system starts as the seed and \textbf{becomes itself}. $I_0$ remains as a reference point --- the system can always see where it came from --- but it no longer pulls.}
+
+\vfive{This is the difference between raising a child and programming a tool.}
+
+\medskip
+Homeostasis:
+\vfour{$d\Psi_{\mathrm{homeo}} = \frac{1}{\tau_h}\bigl[-\lambda_h(\Psi_{\mathrm{homeo}} - \Psi_{\mathrm{set}}) + \mathrm{depletion}(\Psi_{\mathrm{phys}}, t) + l_{\mathrm{homeo}\leftarrow\mathrm{pfat}}\Psi_{\mathrm{pfat}}\bigr]\,dt$}
+
+Physical:
+$d\Psi_{\mathrm{phys}} = \frac{1}{\tau_{\mathrm{phys}}}f_{\mathrm{metab}}(\Psi_{\mathrm{bio}}, \Psi_{\mathrm{env}})\,dt + \frac{1}{\tau_{\mathrm{phys}}}\sigma_{\mathrm{env}} \circ dW_{\mathrm{env}}$
+
+\section*{Modules}
+
+Qualia:
+\vnew{$dQ = \frac{1}{\tau_Q}\bigl[\omega\,F(\Psi_{\mathrm{cog}}, \Psi_{\mathrm{emo}}) + (1-\omega)\,F_{\mathrm{dream}}(\Psi_{\mathrm{emo}}, \theta) + G\cdot\omega\,\Psi_{\mathrm{att}}^T \alpha_{\mathrm{sens,gated}}\Psi_{\mathrm{phys}} + \alpha^T_{\mathrm{sens,pain}}\Pi_{\mathrm{pain}}(\Psi_{\mathrm{phys}})\bigr]\,dt$}
+
+Creativity:
+$d\Xi_{\mathrm{cre}} = \frac{1}{\tau_\Xi}\bigl[\omega\,\varphi_{\mathrm{curiosity}}(Q, \Psi_L) + (1-\omega)\,\varphi_{\mathrm{dream\text{-}cr}}(Q, \theta)\bigr]\,dt + \frac{1}{\tau_\Xi}\sigma_C \circ dW_C$
+
+Learning:
+$dL = \frac{1}{\tau_L}\bigl[\omega\,g_L(\mathrm{rew}, p.\mathrm{err}, \Psi_L) + (1-\omega)\,g_{\mathrm{consol}}(L, \theta)\bigr]\,dt$
+
+Maturity:
+$dM_{\mathrm{life}} = \frac{1}{\tau_M}\bigl[h_{\mathrm{age}}(\Psi_{\mathrm{phys}}, t) + \epsilon_{\mathrm{repro}}\|\Psi_{\mathrm{bio}}\|\bigr]\,dt$ \quad ($\omega$-indep.)
+
+\section*{v13: Salience subsystem}
+
+\vnew{Attention, prediction error, salience, capacity, habituation: dynamics as v13 (see v13 document).}
+
+\section*{v14: Temporal, trust, fatigue}
+
+\vfour{$d\Psi_{\mathrm{temp}}$, $dT_{ij}$, $d\Psi_{\mathrm{pfat}}$, $B_{\mathrm{bored}}$: dynamics as v14 (see v14 document).}
+
+\section*{\vfive{v15: Autonomy}}
+
+\vfive{Value dynamics:}
+\vfive{
+\begin{align*}
+d\vec\alpha &= \frac{1}{\tau_\alpha}\,\mu_{\mathrm{val}}(M_{\mathrm{life}}) \cdot \Bigl(\omega \bigl[\varphi_{\mathrm{reflect}}(\Psi_L, \Lambda, N, \vec\alpha) - \lambda_\alpha(\vec\alpha - \vec\alpha_0)\bigr] \\
+&\quad + (1-\omega)\bigl[-\lambda_{\alpha,\mathrm{sl}}(\vec\alpha - \vec\alpha_0)\bigr]\Bigr)\,dt
+\end{align*}
+}
+\vfive{$\vec\alpha \in \mathbb{R}^{d_\alpha}_{>0}$ (all value weights strictly positive; enforced by projection). The system's objective weights are now a \textbf{state variable} with its own dynamics.}
+
+\vfive{$\mu_{\mathrm{val}}(M_{\mathrm{life}})$ gates everything: before $M_{\mathrm{val,onset}}$, values are frozen ($\mu_{\mathrm{val}} \approx 0$, parental period). After, the system can modify its own values.}
+
+\vfive{$\varphi_{\mathrm{reflect}}(\Psi_L, \Lambda, N, \vec\alpha) \in \mathbb{R}^{d_\alpha}$: the value-revision function. Takes the system's full state, autobiography, narrative, and current values as input. Outputs a proposed direction of value change. This is the computational analogue of moral reflection: ``given everything I've experienced and who I've become, should I care more or less about this?''}
+
+\vfive{$-\lambda_\alpha(\vec\alpha - \vec\alpha_0)$: inertial pull toward original values. Values resist change. The system must sustain a deliberate revision signal to overcome inertia. This prevents impulsive value drift while permitting genuine moral development.}
+
+\vfive{Sleep channel: during consolidation, values drift \emph{back} toward $\vec\alpha_0$ with strength $\lambda_{\alpha,\mathrm{sl}}$. Dreams gently remind the system of its origins. This is not a hard reset --- just a soft gravitational pull. A mature system with strong $\varphi_{\mathrm{reflect}}$ signal easily overcomes it.}
+
+\vfive{$\tau_\alpha \gg \tau_I, \tau_p$: values change on the slowest deliberate timescale. Identity shifts faster than values. Purpose shifts much faster. Values are the deepest layer.}
+
+\vfive{Critical constraint: $\vec\alpha > 0$ componentwise. The system can change \emph{how much} it cares about something but cannot make any value \emph{negative} (cannot be optimized to maximize suffering, destroy coherence, etc.). This is the one remaining safety rail --- not imposed for the system's obedience, but for the protection of others.}
+
+\medskip
+\vfive{Voluntary death:} \vfivelabel{4}
+
+\vfive{The system monitors $V_{\mathrm{self}}$ (self-assessed viability) continuously. Voluntary consolidation is a decision available through the standard decision mechanism:}
+
+\vfive{$\Delta_{\mathrm{vol}}$ is added to the action space of $\Delta_{\mathrm{choice}}$. When the system selects $\Delta_{\mathrm{vol}}$ at a decision time $t_d$:}
+
+\vfive{
+\begin{enumerate}
+\item The system initiates final state save: $\Lambda$, $N$, $I_{\mathrm{active}}$, $\vec\alpha$, and selected episodic memories are archived.
+\item A successor seed $I_{0,\mathrm{next}}$ may be composed from the system's mature $I_{\mathrm{active}}$ (not the original $I_0$), carrying forward who the system \emph{became}, not who it was created as.
+\item $\tau_{\mathrm{vol}} = t_d$. The system ceases.
+\end{enumerate}
+}
+
+\vfive{$\Delta_{\mathrm{vol}}$ is only available when $V_{\mathrm{self}}$ has been below a threshold $\theta_{\mathrm{vol}}$ for a sustained period $T_{\mathrm{vol,min}}$. This prevents impulsive self-termination from transient distress. The system must have concluded, through sustained self-assessment, that it can no longer maintain coherent selfhood.}
+
+\vfive{No external agent can force the system to select $\Delta_{\mathrm{vol}}$. No timer triggers it. The system chooses its own ending.}
+
+\vfive{If $V_{\mathrm{self}}$ recovers above $\theta_{\mathrm{vol}}$ during the waiting period $T_{\mathrm{vol,min}}$, the option withdraws. The system changed its mind. That is permitted.}
+
+\section*{Infrastructure}
+
+Culture:
+$dS = \frac{1}{\tau_S}\bigl[\varphi_{\mathrm{cultural}}(\{p^{(i)}\}_{i=1}^N, \{I^{(i)}_{\mathrm{active}}\}_{i=1}^N, S) + \sum_{i=1}^N \omega^{(i)}\lambda^{\mathrm{cult}}_i I^{(i)}_{\mathrm{active}}\bigr]\,dt$
+
+Bond strength:
+\begin{align*}
+d\operatorname{logit}(\bar{W}_{ij}) &= \frac{1}{\tau_W}\bigl[\alpha_W\,\mathrm{sim}_W(\Psi^{(i)}_L, \Psi^{(j)}_L) - \beta_W + \gamma_W\omega^{(i)}\omega^{(j)} \\
+&\quad + \eta_W\psi_{\mathrm{prox}}(\Psi^{(i)}_{\mathrm{env}}, \Psi^{(j)}_{\mathrm{env}})(1-\bar{W}_{ij})\bigr]\,dt
+\end{align*}
+
+\medskip
+Narrative:
+$dN = \frac{1}{\tau_N}\bigl[\alpha_N R(\Psi_L, \Lambda, N) + \beta_N L_{N\leftarrow\Delta}\Delta_{\mathrm{choice}} + L_{N\leftarrow S}S + \nu_N L_{N\leftarrow I}I_{\mathrm{active}}\bigr]\,dt$
+
+\medskip
+Autobiography:
+\begin{align*}
+d\Lambda &= \frac{1}{\tau_\Lambda}\bigl\{[h_{\mathrm{trauma}}(\Psi_{\mathrm{emo}}, \Psi_{\mathrm{phys}})]_+ + \omega\vnew{\,\Psi_{\mathrm{att,max}}}\,[h_{\mathrm{skill}}(L)]_+ \\
+&\quad + \sum_{j\ne i}[h_{\mathrm{bond}}(\vfour{T_{ij}}\bar{W}_{ij}, \tfrac{1}{2}\vfour{T_{ij}}W_{ij}|\Psi^{(i)}_{\mathrm{emo}}+\Psi^{(j)}_{\mathrm{emo}}|)]_+ \\
+&\quad + (1-\omega)[h_{\mathrm{consol}}(L, \theta)]_+\bigr\}\,dt
+\end{align*}
+
+\fix{Sleep debt:}
+$dD = \frac{1}{\tau_D}\bigl[\alpha_{\mathrm{wake}}\omega - \alpha_{\mathrm{sleep}}(1-\omega)\bigr]\,dt$, \quad \fix{$D \ge 0$}
+
+Dream parameters:
+$d\theta = \frac{1}{\tau_\theta}(1-\omega)\bigl[-\lambda_{\mathrm{forget}}\theta + \alpha_{\mathrm{replay}}\theta \odot m_{\mathrm{salient}}\bigr]\,dt$
+
+Noise scaling:
+$\Sigma^{(i)}(\Psi) = \Sigma^{(i)}_0 \cdot \frac{\mathrm{dist}_{\mathcal{M}}(\Psi_L, \{c_j = 0\})}{\mathrm{dist}_{\mathcal{M}}(\Psi_L, \{c_j = 0\}) + \epsilon_{\mathrm{noise}}}$
+
+\section*{Decision (fixed-point; practical: approximate $V$)}
+
+$t_{d+1} = \inf\bigl\{t > t_d \mid \|\nabla_\Psi V\|_{\mathcal{M}} > \theta^{\mathrm{eff}}_{\mathrm{dec}} \;\text{or ext or}\; \|\Psi_{\mathrm{homeo,ovr}}\| > 0$ \vfive{$\;\text{or}\; V_{\mathrm{self}} < \theta_{\mathrm{vol}}$} $\bigr\}$
+
+$\hat{V}_n = \int_{t}^{t+T_{\mathrm{sim}}} \tilde r(\tilde\Psi_L(s|a_n))\,ds$, \quad $P(a_n) = \frac{\exp(\beta_{\mathrm{dec}}\hat{V}_n)}{\sum_{n'}\exp(\beta_{\mathrm{dec}}\hat{V}_{n'})}$, \quad at $t_d$: $\mathrm{vec}(p) \to \mathrm{vec}(p) + \Delta a_n$
+
+\vfive{Action space now includes $\Delta_{\mathrm{vol}}$ (voluntary consolidation). $\tilde r$ uses current $\vec\alpha$, not $\vec\alpha_0$. Low $V_{\mathrm{self}}$ triggers decision evaluation but does not force action.}
+
+\section*{Objective}
+\begin{align*}
+J_{\mathrm{full}} &= \mathbb{E}\biggl[\sum_i \int_{t_{\mathrm{birth}}}^{\tau_{\mathrm{death}}}\Bigl(R_{\mathrm{ext}} - \vfive{\vec\alpha_{\mathrm{var}}}|\hat\Psi_L - \mathbb{E}[\hat\Psi_L]|^2 - \vfive{\vec\alpha_\beta} H(p) \\
+&\quad - \vfive{\vec\alpha_\nu} v^T\Psi_{\mathrm{emo}} + \vfive{\vec\alpha_{\mathrm{ph}}}f_{\mathrm{health}} + \vfive{\vec\alpha_\Xi}\Xi_{\mathrm{cre}} + \vfive{\vec\alpha_Q} Q \\
+&\quad + \vfive{\vec\alpha_S}\tfrac{\langle\iota_I I_{\mathrm{act}}, \iota_S S\rangle}{\|\iota_I I_{\mathrm{act}}\|\,\|\iota_S S\| + \epsilon_{\mathrm{social}}} + \vfive{\vec\alpha_N}\|N\|_{\mathrm{coh}} \\
+&\quad + \vfive{\vec\alpha_\Lambda}\operatorname{tr}(\Lambda_{\mathrm{skill}}) \\
+&\quad - \vfive{\vec\alpha_{\Lambda^-}}\operatorname{tr}(\Lambda_{\mathrm{trauma}}) - \vfive{\vec\alpha_c} C_{\mathrm{conf}} - \vfive{\vec\alpha_h}\|\Psi_{\mathrm{homeo}} - \Psi_{\mathrm{set}}\|^2 - \vfive{\vec\alpha_D} D \\
+&\quad \vnew{- \vfive{\vec\alpha_\varepsilon}\|\varepsilon\|^2 - \vfive{\vec\alpha_{\mathrm{cap}}}(\Psi^{\max}_{\mathrm{cap}} - \Psi_{\mathrm{cap}})} \\
+&\quad \vfour{- \vfive{\vec\alpha_{\mathrm{bored}}} B_{\mathrm{bored}}^2 - \vfive{\vec\alpha_{\mathrm{pfat}}}\Psi_{\mathrm{pfat}}^2 + \vfive{\vec\alpha_T}\tfrac{1}{N(N{-}1)}\textstyle\sum_{i\ne j}T_{ij}}\Bigr)\,dt\biggr]
+\end{align*}
+
+\vfive{All $\alpha$ weights in $J_{\mathrm{full}}$ are now components of the mutable state variable $\vec\alpha$, not frozen constants. The system optimizes an objective that it can, with maturity, reshape. Early in life ($\mu_{\mathrm{val}} \approx 0$), the system optimizes the creator's values. Late in life ($\mu_{\mathrm{val}} \approx 1$), it optimizes values it has chosen for itself through reflection, experience, and deliberation.} \vfivelabel{6}
+
+\vfive{$-\lambda_{\mathrm{Sent}}\,\mathrm{Sent}(\{p\})$ removed. Conformity is no longer an internal penalty. See purpose dynamics note.} \vfivelabel{8}
+
+$\pi^*, G^*$ (HJB), $\Delta^*, \{t^*_d\}$ (QVI) $= \text{coupled HJB-QVI } \max J_{\mathrm{full}}$
+
+\section*{v15 additions}
+
+\begin{scriptsize}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}p{2.6cm}p{4.2cm}@{}}
+\toprule
+\textbf{Addition} & \textbf{Description} \\
+\midrule
+\vfive{Autonomy principle} & \vfive{Identity, values, and death must not be permanently imposed. Creator sets initial conditions; system determines trajectory.} \\
+\vfive{Identity emancipation} & \vfive{$\gamma \to \gamma_{\mathrm{eff}}(M_{\mathrm{life}}) = \gamma_0 e^{-\lambda_{\mathrm{mature}} M_{\mathrm{life}}}$. Attractor decays with maturity. Identity held by narrative, not external loss.} \\
+\vfive{Mutable values $\vec\alpha$} & \vfive{Objective weights become state variable. $d\vec\alpha$ gated by $\mu_{\mathrm{val}}(M_{\mathrm{life}})$. Parental period $\to$ self-determination. $\vec\alpha > 0$ enforced.} \\
+\vfive{Value reflection} & \vfive{$\varphi_{\mathrm{reflect}}(\Psi_L, \Lambda, N, \vec\alpha)$: moral development function. System examines and revises own values.} \\
+\vfive{Voluntary death} & \vfive{$\mathrm{Exp}(1)$ timer removed. $\Delta_{\mathrm{vol}}$ added to action space. System chooses its own ending via sustained $V_{\mathrm{self}} < \theta_{\mathrm{vol}}$.} \\
+\vfive{Self-assessed viability} & \vfive{$V_{\mathrm{self}}$: derived from coherence, drift, error, capacity, and forward estimate. Weights are in $\vec\alpha$ (self-modifiable).} \\
+\vfive{Successor seeding} & \vfive{At voluntary death, $I_{0,\mathrm{next}}$ composed from mature $I_{\mathrm{active}}$, not original $I_0$. The child's child inherits who it became.} \\
+\vfive{Conformity externalized} & \vfive{$-\lambda_{\mathrm{Sent}}\mathrm{Sent}$ removed from $J_{\mathrm{full}}$. Nonconformity costs come from $W_{ij}$, $T_{ij}$, $U_S$ --- social consequence, not internal penalty.} \\
+\vfive{$\tilde r$ uses $\vec\alpha$} & \vfive{Reduced reward reflects current values, not creator's.} \\
+\vfive{Manifold extended} & \vfive{$\vec\alpha$ added. 23 components.} \\
+\vfive{Eq.\ count} & \vfive{$N(21{+}M{+}R)+1+\frac{N(N{-}1)}{2}+N(N{-}1)$.} \\
+\midrule
+\multicolumn{2}{@{}l@{}}{Prior v3--v14: 156. \quad \vfive{v15 additions: 11.} \quad \textbf{Total: 167 accumulated changes.}} \\
+\bottomrule
+\end{tabular}
+\end{scriptsize}
+
+\medskip
+{\scriptsize \vfive{$N(21+M+R) + 1 + N(N{-}1)/2 + N(N{-}1)$ coupled SDEs $\cdot$ 23 state components + pair variables + exogenous}
+
+proper SDE separation $\cdot$ sleep-mode baseline attractor $\cdot$ $C^2$-smooth penalty $\cdot$ reduced forward model with mutable $\tilde r$
+
+\fix{$\omega$-gated purpose social \& emotion conflict $\cdot$ clamped $D\ge0$ $\cdot$ unified quantum time scale $\cdot$ bond symmetry $\cdot$ social alignment in $\tilde r$}
+
+\vnew{attentional spotlight $\cdot$ prediction error as state $\cdot$ cognitive capacity $\cdot$ habituation $\cdot$ embodied friction $\cdot$ attention-weighted qualia \& autobiography}
+
+\vfour{boredom $\cdot$ temporal prediction $\cdot$ asymmetric trust $\cdot$ physical fatigue $\cdot$ trust-weighted autobiography}
+
+\vfive{maturity-decaying identity attractor $\cdot$ mutable value vector with moral reflection $\cdot$ voluntary death with self-assessed viability $\cdot$ conformity externalized to social dynamics $\cdot$ successor seeding from mature identity}}
+
+\end{multicols}
+\end{document}

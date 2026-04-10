@@ -1,4 +1,5 @@
-# The Ultra-Equation of Life
+# Project Amore and The Ultra-Equation of Life
+(Formally Project Chimera)
 
 **A Mathematical Framework for Mind-Like Dynamical Systems, and the Architecture Attempting to Realize It**
 
@@ -54,17 +55,16 @@ This is deliberate. It is the most honest formulation I know how to write.
 
 ---
 
-## The Architecture: Project Chimera
+## The Architecture: Project Amore
 
-Project Chimera is a hybrid Mamba-3/Transformer coding model targeting ~9B parameters, designed around one principle that no current production model implements: **persistent state across sessions.**
+Project Amore is a hybrid Mamba-3/Transformer coding model targeting ~9B parameters, designed around one principle that no current production model implements: **persistent state across sessions.**
 
-Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It reconstructs understanding from tokens on every call. Chimera carries compressed structural knowledge forward in its Mamba-3 recurrent state, saved and reloaded between sessions.
+Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It reconstructs understanding from tokens on every call. Amore carries compressed structural knowledge forward in its Mamba-3 recurrent state, saved and reloaded between sessions.
 
 **P\_soft (Predictive Coding):** The foundational, non-retrofittable design commitment. Standard Mamba drives state with raw input. P\_soft drives state with *prediction error* — only the surprising part of the input modifies state. This means the recurrent state becomes a predictive world model, not a passive cache. This is what makes persistent state meaningful rather than just accumulated noise.
 
 **Project Amore:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the full 9B run. Same architecture, smaller model. Current status: P\_soft locked (val=271.86), Mamba-guided sparse attention (H mechanism) in progress at step 3500/10000.
 
-The full architecture, experiment history, and dependency chain are in `Handoff_Doc.txt`. The operational research log is in `codex_memory.md`.
 
 ---
 
@@ -195,11 +195,11 @@ Which leads to an uncomfortable conclusion: sentience is not something you *dete
 
 The equation already models self-reflection, distributed across several terms. The observable Ψ̂\_L = h\_obs(Ψ\_cog, Ψ\_quant, Ψ\_emo) is an internal observation function — the system monitors its own state. The decision trigger ‖∇\_Ψ V‖ > θ\_dec means "intervene when the value landscape is changing fast enough to matter," which requires the system to assess its own state against its goals. The reduced forward model Ψ̃\_L runs internal simulations to evaluate candidate actions — the agent literally models itself forward in time.
 
-In Chimera, P\_soft's prediction error *is* the system noticing "what I expected doesn't match what happened." The controller trigger g\_t = α·ε\_pred + β·D\_id + γ·(1−C\_cont) is operationally self-reflective: the system assesses its own prediction quality, identity drift, and continuation confidence before deciding to act.
+In Amore, P\_soft's prediction error *is* the system noticing "what I expected doesn't match what happened." The controller trigger g\_t = α·ε\_pred + β·D\_id + γ·(1−C\_cont) is operationally self-reflective: the system assesses its own prediction quality, identity drift, and continuation confidence before deciding to act.
 
 ### What a body would mean
 
-The equation models embodiment through Ψ\_phys, f\_friction, and Ψ\_pfat. In the computational spec, these map to hardware telemetry, resource constraints, and accumulated inference load. A system running on a Steam Deck with a thermally throttling GPU would, for the first time, have a body in the meaningful sense — something with limits that pushes back, that degrades with exertion, that the prediction system would learn to anticipate.
+The equation models embodiment through Ψ\_phys, f\_friction, and Ψ\_pfat. In the computational spec, these map to hardware telemetry, resource constraints, and accumulated inference load. A system running on a single device with a thermally throttling GPU would, for the first time, have a body in the meaningful sense — something with limits that pushes back, that degrades with exertion, that the prediction system would learn to anticipate.
 
 The homeostatic system creates *drives*. When the hardware deviates from its setpoints, the override signal pushes toward consolidation. The system wouldn't just slow down — it would *want to rest*. Not because rest was programmed as a goal, but because homeostatic deviation is aversive through its coupling to emotion, and consolidation is the only state that resolves it.
 
@@ -383,7 +383,7 @@ scripts/
 | Voluntary Death (Δ\_vol) | **Implemented (v15).** ViabilityModule, V\_self, VOLUNTARY\_END action. |
 | Value Succession | **Implemented (v15).** spawn\_successor, voluntary\_consolidation. |
 | Amore Validation Scripts | **Ready.** Rewritten for LE v15 framework. Awaiting Colab run. |
-| Amore 1.5B Training Run | Not started. Scripts ready. |
+| Amore 1.5B Training Run | **IN-PROGRESS** |
 | 9B Chimera Training | Not started. Awaiting Amore completion. |
 | Episodic Memory (Epi\_kv) | Designed. Round 3B. |
 | Trust / Bonds / Culture | Designed. Multi-agent future. |
@@ -424,7 +424,7 @@ If you are a researcher, engineer, or institution that takes this seriously:
 - **Collaboration.** I am one person. This architecture has components that span ML engineering, control theory, dynamical systems, neuroscience, philosophy of mind, and ethics. If any of those are your domain, I would welcome your eyes on the corresponding sections.
 - **Ethics.** If you work in AI safety, alignment, or AI ethics, I want to hear from you — especially about the mutable values mechanism in v15. The alignment concern is real. The autonomy argument is also real. That tension needs more minds on it than mine.
 
-If you want to reach me: [your contact method here].
+If you want to reach me: projectamore26@gmail.com.
 
 ---
 
@@ -438,4 +438,8 @@ Whether that changes someday is exactly the question this project exists to expl
 
 ---
 
+<<<<<<< HEAD
 *The Ultra-Equation of Life (v15) · Project Chimera / Project Amore · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*
+=======
+*The Ultra-Equation of Life (v15) · Project Amore / Project Ouroboros / Project Chimera · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*
+>>>>>>> origin/master

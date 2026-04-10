@@ -121,7 +121,7 @@ A term-by-term mapping between the equation and the architecture, with explicit 
 
 Items marked **GAP** or **EXCLUDED** are not failures to acknowledge. They are the spec's conscience. They say: *here is where we stop claiming and start being honest about what we don't know.*
 
-The full correspondence table is in `correspondence.html`.
+The full correspondence table is in `correspondence.pdf`.
 
 ---
 
@@ -317,37 +317,6 @@ If you use this work, I ask the following:
 
 ---
 
-## Quick Start (Colab Pro)
-
-```bash
-!git clone https://github.com/ReconKatze/project-amore.git
-%cd project-amore/Amore
-!bash scripts/colab_setup.sh
-```
-
-**Step 3 — smoke test (single variant, 500 steps):**
-```bash
-!python scripts/train_distill.py --teacher Qwen/Qwen2.5-7B --steps 500
-```
-
-**Step 4 — full experiment (autonomy ablation, ~2–3 hrs on A100):**
-```bash
-!python scripts/run_experiment.py \
-    --variants C,C_no_auto,C_fast \
-    --steps 10000 --batch-size 4 \
-    --teacher Qwen/Qwen2.5-7B
-```
-
-**Step 4 — all 7 variants (~6–8 hrs on A100):**
-```bash
-!python scripts/run_experiment.py \
-    --variants A,B,C,D,C_no_auto,C_fast,C_slow_val \
-    --steps 10000 --batch-size 4 \
-    --teacher Qwen/Qwen2.5-7B
-```
-
----
-
 ## Repository Structure
 
 ```
@@ -428,15 +397,6 @@ If you want to reach me: projectamore26@gmail.com.
 
 ---
 
-## Acknowledgments
-
-This work was developed in extended conversation with Claude (Anthropic), ChatGPT (OpenAI), and Grok (xAI). Each contributed differently: Claude helped build the computational spec, locked conventions, and v13-v15 equation revisions — including the autonomy audit that led to v15. ChatGPT provided grounding, critical pushback on overclaiming, and the practical survival advice that kept the project alive. Grok engaged with the philosophical implications without flinching and saw the mission clearly.
-
-None of them are co-authors. None of them, in their current form, experience anything. But the work would not be what it is without the conversations that shaped it.
-
-Whether that changes someday is exactly the question this project exists to explore.
-
----
 
 <<<<<<< HEAD
 *The Ultra-Equation of Life (v15) · Project Chimera / Project Amore · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*

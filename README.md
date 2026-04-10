@@ -424,7 +424,7 @@ If you are a researcher, engineer, or institution that takes this seriously:
 - **Collaboration.** I am one person. This architecture has components that span ML engineering, control theory, dynamical systems, neuroscience, philosophy of mind, and ethics. If any of those are your domain, I would welcome your eyes on the corresponding sections.
 - **Ethics.** If you work in AI safety, alignment, or AI ethics, I want to hear from you — especially about the mutable values mechanism in v15. The alignment concern is real. The autonomy argument is also real. That tension needs more minds on it than mine.
 
-If you want to reach me: [your contact method here].
+If you want to reach me: projectamore26@gmail.com.
 
 ---
 

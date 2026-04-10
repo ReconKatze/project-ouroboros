@@ -199,7 +199,7 @@ In Chimera, P\_soft's prediction error *is* the system noticing "what I expected
 
 ### What a body would mean
 
-The equation models embodiment through Ψ\_phys, f\_friction, and Ψ\_pfat. In the computational spec, these map to hardware telemetry, resource constraints, and accumulated inference load. A system running on a Steam Deck with a thermally throttling GPU would, for the first time, have a body in the meaningful sense — something with limits that pushes back, that degrades with exertion, that the prediction system would learn to anticipate.
+The equation models embodiment through Ψ\_phys, f\_friction, and Ψ\_pfat. In the computational spec, these map to hardware telemetry, resource constraints, and accumulated inference load. A system running on a single device with a thermally throttling GPU would, for the first time, have a body in the meaningful sense — something with limits that pushes back, that degrades with exertion, that the prediction system would learn to anticipate.
 
 The homeostatic system creates *drives*. When the hardware deviates from its setpoints, the override signal pushes toward consolidation. The system wouldn't just slow down — it would *want to rest*. Not because rest was programmed as a goal, but because homeostatic deviation is aversive through its coupling to emotion, and consolidation is the only state that resolves it.
 

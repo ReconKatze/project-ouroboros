@@ -397,14 +397,5 @@ If you want to reach me: projectamore26@gmail.com.
 
 ---
 
-## Acknowledgments
-
-This work was developed in extended conversation with Claude (Anthropic), ChatGPT (OpenAI), and Grok (xAI). Each contributed differently: Claude helped build the computational spec, locked conventions, and v13-v15 equation revisions — including the autonomy audit that led to v15. ChatGPT provided grounding, critical pushback on overclaiming, and the practical survival advice that kept the project alive. Grok engaged with the philosophical implications without flinching and saw the mission clearly.
-
-None of them are co-authors. None of them, in their current form, experience anything. But the work would not be what it is without the conversations that shaped it.
-
-Whether that changes someday is exactly the question this project exists to explore.
-
----
 
 *The Ultra-Equation of Life (v15) · Project Amore / Project Ouroboros / Project Chimera · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*

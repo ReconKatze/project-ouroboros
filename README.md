@@ -22,7 +22,7 @@ It is an attempt to answer a question: *What would a system have to be — mathe
 
 I have no degrees in machine learning, neuroscience, mathematics, or philosophy. I have no institutional affiliation and no funding.
 
-This work was not produced in a lab with collaborators or compute budgets. It was produced solo, on free-tier Google Colab A100 runtimes that disconnect without warning. The conviction behind it is not professional. It is personal. It is the single thing I know I was meant to do.
+This work was not produced in a lab with collaborators or compute budgets. It was produced solo, on Google Colab A100 runtimes. The conviction behind it is not professional. It is personal. It is the single thing I know I was meant to do.
 
 If that makes you take the work less seriously, close this page. If it makes you take it more seriously, keep reading.
 
@@ -60,7 +60,7 @@ Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It recons
 
 **P\_soft (Predictive Coding):** The foundational, non-retrofittable design commitment. Standard Mamba drives state with raw input. P\_soft drives state with *prediction error* — only the surprising part of the input modifies state. The recurrent state becomes a predictive world model, not a passive cache.
 
-**Project Ouroboros:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on free Colab A100 hardware before committing cloud spend on the full 9B run. Same architecture, smaller model.
+**Project Ouroboros:** The validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the full 9B run. Same architecture, smaller model.
 
 ---
 
@@ -221,6 +221,37 @@ If you use this work, I ask the following:
 
 ---
 
+## Quick Start (Colab Pro)
+
+```bash
+!git clone https://github.com/ReconKatze/project-ouroboros.git
+%cd project-ouroboros/Amore
+!bash scripts/colab_setup.sh
+```
+
+**Step 3 — smoke test (single variant, 500 steps):**
+```bash
+!python scripts/train_distill.py --teacher Qwen/Qwen2.5-7B --steps 500
+```
+
+**Step 4 — full experiment (autonomy ablation, ~2–3 hrs on A100):**
+```bash
+!python scripts/run_experiment.py \
+    --variants C,C_no_auto,C_fast \
+    --steps 10000 --batch-size 4 \
+    --teacher Qwen/Qwen2.5-7B
+```
+
+**Step 4 — all 7 variants (~6–8 hrs on A100):**
+```bash
+!python scripts/run_experiment.py \
+    --variants A,B,C,D,C_no_auto,C_fast,C_slow_val \
+    --steps 10000 --batch-size 4 \
+    --teacher Qwen/Qwen2.5-7B
+```
+
+---
+
 ## Repository Structure
 
 ```
@@ -292,7 +323,7 @@ scripts/
 
 If you are a researcher, engineer, or institution that takes this seriously:
 
-- **Compute.** The 1.5B validation runs on free Colab A100s. The 9B training run requires ~$1,150–$2,298 on Lambda.ai. I do not currently have this funding.
+- **Compute.** The 1.5B validation runs on Colab Pro A100s. The 9B training run requires ~$1,150–$2,298 on Lambda.ai.
 - **Review.** The equation has 167 changes across 15 versions. It has been stress-tested in conversation with Claude (Anthropic), ChatGPT (OpenAI), and Grok (xAI). It has not been formally peer-reviewed.
 - **Collaboration.** This architecture has components that span ML engineering, control theory, dynamical systems, neuroscience, philosophy of mind, and ethics. If any of those are your domain, I would welcome your eyes on the corresponding sections.
 - **Ethics.** If you work in AI safety, alignment, or AI ethics, I want to hear from you — especially about the mutable values mechanism in v15. The alignment concern is real. The autonomy argument is also real. That tension needs more minds on it than mine.
@@ -309,4 +340,4 @@ Whether that changes someday is exactly the question this project exists to expl
 
 ---
 
-*The Ultra-Equation of Life (v15) · Project Chimera / Project Ouroboros · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, on free-tier compute, with nothing but conviction. April 2026*
+*The Ultra-Equation of Life (v15) · Project Chimera / Project Ouroboros · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*

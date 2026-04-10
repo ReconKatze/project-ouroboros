@@ -511,14 +511,13 @@ def parse_args():
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--warmup-steps", type=int,  default=200,
                    help="LR warmup steps (also controls LE model warmup_steps config)")
-    p.add_argument("--grad-accum",  type=int,   default=4,
-                   help="Gradient accumulation steps")
+    p.add_argument("--grad-accum",  type=int,   default=1,
+                   help="Gradient accumulation steps (default 1 — A100 handles batch-size=4 natively)")
     p.add_argument("--eval-every",  type=int,   default=250)
     p.add_argument("--log-every",   type=int,   default=100)
     p.add_argument("--n-val",       type=int,   default=100)
-    p.add_argument("--batch-size",  type=int,   default=1,
-                   help="Sequences per forward (state is shared across batch). "
-                        "Use grad-accum for effective larger batches.")
+    p.add_argument("--batch-size",  type=int,   default=4,
+                   help="Sequences per forward. A100 40GB: 4 comfortable. A100 80GB: up to 8.")
     p.add_argument("--variants",    default="C,C_no_auto",
                    help="Comma-separated variant names to run")
     p.add_argument("--save-dir",    default="checkpoints")
@@ -554,8 +553,8 @@ def main():
     print(f"AMP dtype: {dtype_name}")
 
     n_train = args.steps * args.batch_size + 500
-    effective_lr = args.lr * max(args.batch_size, args.grad_accum)
-    print(f"Effective LR: {args.lr} × {max(args.batch_size, args.grad_accum)} "
+    effective_lr = args.lr * args.batch_size * args.grad_accum
+    print(f"Effective LR: {args.lr} × batch {args.batch_size} × accum {args.grad_accum} "
           f"→ {effective_lr:.2e}")
     print(f"\nVariants: {list(selected.keys())}  |  Steps: {args.steps}  |  "
           f"Grad accum: {args.grad_accum}  |  Val every: {args.eval_every}")

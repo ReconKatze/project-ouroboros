@@ -40,7 +40,13 @@ from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
-from chimera.models.hybrid_model import HybridChimeraModel, MambaGuidedAttentionWrapper
+from chimera.models.hybrid_model import (
+    HybridChimeraModel,
+    MambaGuidedAttentionWrapper,
+    CrossLayerIndexWrapper,
+    LoopedAttentionWrapper,
+    AttentionContext,
+)
 from chimera.models.beta_mamba import BetaGatedMamba, BetaGated2AMamba, PSoftMambaWrapper
 from chimera.utils.layer_plan import build_layer_plan, ATTN_KEEP_DEFAULTS
 
@@ -212,6 +218,20 @@ VARIANTS = {
         "psoft":        True,
         "gate_h":       True,
         "label":        "B_psoft + 2H Mamba-guided sparse attention",
+    },
+    "B_psoft_2G": {
+        "d_state_spec": {"type": "uniform", "d": 64},
+        "gate_mode":    "constant",
+        "psoft":        True,
+        "gate_g":       True,
+        "label":        "B_psoft + 2G cross-layer index sharing (training-free)",
+    },
+    "B_psoft_2E": {
+        "d_state_spec": {"type": "uniform", "d": 64},
+        "gate_mode":    "constant",
+        "psoft":        True,
+        "gate_e":       True,
+        "label":        "B_psoft + 2E looped attention (4× shared weights + exit gate)",
     },
     "D_bell2_32_psoft": {
         # Floor raised to 64: body=[64×6] + tail=[96,128] per span.
@@ -499,6 +519,64 @@ def build_variant_student(args, cfg, device):
                       f"(W_q_rel={guided.W_q_rel.weight.numel()}, "
                       f"W_k_rel={guided.W_k_rel.weight.numel()})")
 
+    # Round 2G: cross-layer index sharing (no trainable params — training-free)
+    # Layer 0 is skipped (no preceding Mamba). First attn layer with a preceding
+    # Mamba becomes "full" (writes cache); all subsequent attn layers become "shared".
+    gate_g = cfg.get("gate_g", False)
+    if gate_g:
+        hybrid.g_stats_accum = []
+        hybrid.g_attn_ctx    = AttentionContext()
+
+        last_mamba  = None
+        first_attn_with_mamba_seen = False
+        for plan in hybrid.layer_plan:
+            layer = hybrid.layers[plan["layer_idx"]]
+            if plan["kind"] == "mamba":
+                last_mamba = hybrid.adapter.get_attention(layer)
+            elif plan["kind"] == "attn":
+                if last_mamba is None:
+                    continue   # layer 0: no preceding Mamba → leave untouched
+                role = "full" if not first_attn_with_mamba_seen else "shared"
+                first_attn_with_mamba_seen = True
+                orig_attn = hybrid.adapter.get_attention(layer)
+                g_wrapper = CrossLayerIndexWrapper(
+                    orig_attn,
+                    preceding_mamba=last_mamba,
+                    attn_ctx=hybrid.g_attn_ctx,
+                    role=role,
+                    layer_idx=plan["layer_idx"],
+                    stats_accum=hybrid.g_stats_accum,
+                )
+                hybrid.adapter.set_attention(layer, g_wrapper)
+                print(f"  [G] Layer {plan['layer_idx']:2d}: CrossLayerIndexWrapper "
+                      f"role={role!r}")
+
+    # Round 2E: looped attention (exit gate is the only new trainable param)
+    # Layer 0 is skipped (anchor — no preceding Mamba context to refine against).
+    # All other attention layers get a LoopedAttentionWrapper with shared weights
+    # across up to _MAX_LOOPS iterations and an independent per-layer exit gate.
+    gate_e = cfg.get("gate_e", False)
+    if gate_e:
+        hybrid.e_exit_accum  = []
+        hybrid.e_stats_accum = []
+        d_model_e = base.config.hidden_size  # safe even if gate_mode block didn't run
+        for plan in hybrid.layer_plan:
+            if plan["kind"] != "attn" or plan["layer_idx"] == 0:
+                continue
+            layer     = hybrid.layers[plan["layer_idx"]]
+            orig_attn = hybrid.adapter.get_attention(layer)
+            e_wrapper = LoopedAttentionWrapper(
+                orig_attn,
+                d_model=d_model_e,
+                exit_accum=hybrid.e_exit_accum,
+                stats_accum=hybrid.e_stats_accum,
+                layer_idx=plan["layer_idx"],
+            )
+            hybrid.adapter.set_attention(layer, e_wrapper)
+            print(f"  [E] Layer {plan['layer_idx']:2d}: LoopedAttentionWrapper registered "
+                  f"(max_loops={LoopedAttentionWrapper._MAX_LOOPS}, "
+                  f"exit_gate_params={e_wrapper.exit_gate.weight.numel() + 1})")
+
     # Freeze all, then unfreeze Mamba wrappers + sink tokens
     for p in hybrid.parameters():
         p.requires_grad_(False)
@@ -519,6 +597,15 @@ def build_variant_student(args, cfg, device):
                 if isinstance(wrapper, MambaGuidedAttentionWrapper):
                     wrapper.W_q_rel.weight.requires_grad_(True)
                     wrapper.W_k_rel.weight.requires_grad_(True)
+    # G: no new parameters — training-free
+    # E: unfreeze only the exit gates (original_attn stays frozen)
+    if gate_e:
+        for plan in hybrid.layer_plan:
+            if plan["kind"] == "attn":
+                wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
+                if isinstance(wrapper, LoopedAttentionWrapper):
+                    wrapper.exit_gate.weight.requires_grad_(True)
+                    wrapper.exit_gate.bias.requires_grad_(True)
 
     hybrid = hybrid.to(device)
     hybrid.train()
@@ -669,6 +756,12 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
             loss = loss + sum(h_align) / len(h_align)
             h_align.clear()
 
+        # Round 2E exit gate entropy reg — accumulated by LoopedAttentionWrapper
+        e_exit = getattr(student, "e_exit_accum", [])
+        if e_exit:
+            loss = loss + sum(e_exit) / len(e_exit)
+            e_exit.clear()
+
         if not torch.isfinite(loss):
             print(f"  [{name}] Step {step}: NaN/Inf loss — stopping variant.")
             break
@@ -725,6 +818,32 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
                 label    = "dense" if phase == 0 else "sparse"
                 print(f"    [{name}] H: entropy={mean_ent:.3f}  ({label})")
                 h_stats.clear()
+            # Round 2G: report mean overlap per Shared layer
+            g_stats = getattr(student, "g_stats_accum", [])
+            if g_stats:
+                from collections import defaultdict
+                by_layer = defaultdict(list)
+                for s in g_stats:
+                    by_layer[s["layer_idx"]].append(s["overlap"])
+                parts = [
+                    f"L{li}={sum(vs)/len(vs)*100:.1f}%"
+                    for li, vs in sorted(by_layer.items())
+                ]
+                print(f"    [{name}] G overlap (Full→Shared): {', '.join(parts)}")
+                g_stats.clear()
+            # Round 2E: report mean exit gate score and loops used per layer
+            e_stats = getattr(student, "e_stats_accum", [])
+            if e_stats:
+                from collections import defaultdict
+                by_layer = defaultdict(list)
+                for s in e_stats:
+                    by_layer[s["layer_idx"]].append(s["gate_mean"])
+                parts = [
+                    f"L{li}={sum(vs)/len(vs):.3f}"
+                    for li, vs in sorted(by_layer.items())
+                ]
+                print(f"    [{name}] E exit gate mean: {', '.join(parts)}")
+                e_stats.clear()
 
         elif step % args.log_every == 0 or step == 1:
             lr_now = scheduler.get_last_lr()[0]

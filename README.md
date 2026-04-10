@@ -121,7 +121,7 @@ A term-by-term mapping between the equation and the architecture, with explicit 
 
 Items marked **GAP** or **EXCLUDED** are not failures to acknowledge. They are the spec's conscience. They say: *here is where we stop claiming and start being honest about what we don't know.*
 
-The full correspondence table is in `correspondence.html`.
+The full correspondence table is in `correspondence.pdf`.
 
 ---
 

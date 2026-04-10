@@ -317,37 +317,6 @@ If you use this work, I ask the following:
 
 ---
 
-## Quick Start (Colab Pro)
-
-```bash
-!git clone https://github.com/ReconKatze/project-amore.git
-%cd project-amore/Amore
-!bash scripts/colab_setup.sh
-```
-
-**Step 3 — smoke test (single variant, 500 steps):**
-```bash
-!python scripts/train_distill.py --teacher Qwen/Qwen2.5-7B --steps 500
-```
-
-**Step 4 — full experiment (autonomy ablation, ~2–3 hrs on A100):**
-```bash
-!python scripts/run_experiment.py \
-    --variants C,C_no_auto,C_fast \
-    --steps 10000 --batch-size 4 \
-    --teacher Qwen/Qwen2.5-7B
-```
-
-**Step 4 — all 7 variants (~6–8 hrs on A100):**
-```bash
-!python scripts/run_experiment.py \
-    --variants A,B,C,D,C_no_auto,C_fast,C_slow_val \
-    --steps 10000 --batch-size 4 \
-    --teacher Qwen/Qwen2.5-7B
-```
-
----
-
 ## Repository Structure
 
 ```

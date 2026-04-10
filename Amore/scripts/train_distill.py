@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Step 3: Distillation from Qwen2.5-3B teacher into HybridChimeraModel.
+"""Step 3 (LE v15): Single-variant distillation proof-of-concept.
 
-Trains only Mamba blocks + sink tokens via temperature-scaled KL divergence.
-All attention layers, MLPs, norms, embeddings, and lm_head are frozen.
+Trains one LifeEquationModel configuration via KL distillation from a teacher.
+Primary proof goal: L_total decreases, gradient flows through all LE modules.
 
-Primary proof goal: gradient flow through mamba-ssm CUDA kernels.
+Use this for quick smoke-tests and single-config runs.
+For multi-variant comparisons, use run_experiment.py.
 
 Usage (Colab A100/T4):
     python scripts/train_distill.py
-    python scripts/train_distill.py --teacher Qwen/Qwen2.5-3B --steps 500
+    python scripts/train_distill.py --teacher Qwen/Qwen2.5-7B --steps 1000
 
-AMP: bfloat16 on A100/H100 (no GradScaler needed), float16 on T4 (GradScaler).
+AMP: bfloat16 on A100/H100, float16 on T4.
 """
 
 import argparse
@@ -19,136 +20,60 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "V2"))
 
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
-from chimera.models.hybrid_model import HybridChimeraModel
-from chimera.utils.layer_plan import build_layer_plan
+from life_eq_v2.config import LifeEquationConfig
+from life_eq_v2.model import LifeEquationModel
+from life_eq_v2.state import FullState
 
 
 # ---------------------------------------------------------------------------
 # AMP dtype detection
 # ---------------------------------------------------------------------------
 
-def get_amp_dtype():
-    """bfloat16 on A100/H100 (native HW, no scaler needed), float16 on T4/V100."""
+def get_amp_dtype() -> torch.dtype:
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
         return torch.bfloat16
     return torch.float16
 
 
 # ---------------------------------------------------------------------------
-# Model builders
+# Data
 # ---------------------------------------------------------------------------
 
-def build_student(args, device):
-    """Load Qwen2.5-0.5B, convert to hybrid, freeze all except Mamba+sinks."""
-    print(f"Building student from {args.student}...")
-
-    # Load in float32 — conversion weight extraction requires float32
-    base = AutoModelForCausalLM.from_pretrained(
-        args.student, dtype=torch.float32
-    ).to(device)
-
-    layer_plan = build_layer_plan(
-        base.config.num_hidden_layers,
-        model_type=base.config.model_type,
-    )
-
-    hybrid = HybridChimeraModel(
-        base, layer_plan, num_sinks=4, device=str(device)
-    )
-    for line in hybrid.conversion_log:
-        print(line)
-
-    # --- Freeze pattern ---
-    # Step 1: freeze everything
-    for p in hybrid.parameters():
-        p.requires_grad_(False)
-
-    # Step 2: unfreeze Mamba wrappers (via layer_plan)
-    for plan in hybrid.layer_plan:
-        if plan["kind"] == "mamba":
-            wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-            for p in wrapper.parameters():
-                p.requires_grad_(True)
-
-    # Step 3: unfreeze sink tokens
-    hybrid.sink_tokens.sinks.requires_grad_(True)
-
-    # Keep student in float32 — GradScaler requires float32 parameters.
-    # autocast handles float16 math during the forward pass.
-    hybrid = hybrid.to(device)
-    hybrid.train()
-
-    trainable = sum(p.numel() for p in hybrid.parameters() if p.requires_grad)
-    total     = sum(p.numel() for p in hybrid.parameters())
-    print(f"Student trainable params: {trainable:,} / {total:,}")
-
-    return hybrid
-
-
-def build_teacher(args, device, amp_dtype):
-    """Load teacher in amp_dtype, eval mode, fully frozen."""
-    dtype_name = "bfloat16" if amp_dtype == torch.bfloat16 else "float16"
-    print(f"Loading teacher {args.teacher} ({dtype_name})...")
-    teacher = AutoModelForCausalLM.from_pretrained(
-        args.teacher, dtype=amp_dtype
-    ).to(device)
-    teacher.eval()
-    for p in teacher.parameters():
-        p.requires_grad_(False)
-    print("Teacher loaded.")
-    return teacher
-
-
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
-
-def make_token_chunks(tokenizer, seq_len):
+def make_token_chunks(tokenizer, seq_len: int):
     """Yield fixed-length LongTensor chunks from streaming wikitext-103."""
     ds = load_dataset(
         "wikitext", "wikitext-103-raw-v1",
-        split="train", streaming=True,
-        trust_remote_code=False,
+        split="train", streaming=True, trust_remote_code=False,
     )
-    buffer = []
-    for example in ds:
-        text = example["text"].strip()
+    buf = []
+    for ex in ds:
+        text = ex["text"].strip()
         if not text:
             continue
-        ids = tokenizer.encode(text, add_special_tokens=False)
-        buffer.extend(ids)
-        while len(buffer) >= seq_len:
-            chunk = buffer[:seq_len]
-            buffer = buffer[seq_len:]
-            yield torch.tensor(chunk, dtype=torch.long)
+        buf.extend(tokenizer.encode(text, add_special_tokens=False))
+        while len(buf) >= seq_len:
+            yield torch.tensor(buf[:seq_len], dtype=torch.long)
+            buf = buf[seq_len:]
 
 
 # ---------------------------------------------------------------------------
 # Loss
 # ---------------------------------------------------------------------------
 
-def distill_loss(student_logits, teacher_logits, T=2.0):
-    """Temperature-scaled KL divergence with per-token std normalization.
-
-    Both inputs must be float32. Normalization stabilizes early training when
-    Mamba logit magnitudes differ from the teacher.
-
-    Args:
-        student_logits: [batch, seq_len, vocab]  (sink positions already removed)
-        teacher_logits: [batch, seq_len, vocab]
-        T: Temperature (default 2.0)
-
-    Returns:
-        Scalar loss.
-    """
-    s = student_logits / (student_logits.std(dim=-1, keepdim=True) + 1e-6)
-    t = teacher_logits / (teacher_logits.std(dim=-1, keepdim=True) + 1e-6)
+def kl_distill_loss(student_logits: torch.Tensor, teacher_logits: torch.Tensor, T: float = 2.0) -> torch.Tensor:
+    """Temperature-scaled KL. Handles vocab size mismatch by truncating to min."""
+    vocab = min(student_logits.size(-1), teacher_logits.size(-1))
+    s = student_logits[..., :vocab]
+    t = teacher_logits[..., :vocab]
+    s = s / (s.std(dim=-1, keepdim=True) + 1e-6)
+    t = t / (t.std(dim=-1, keepdim=True) + 1e-6)
     log_p_s = F.log_softmax(s / T, dim=-1)
     p_t     = F.softmax(t / T, dim=-1)
     return F.kl_div(log_p_s, p_t, reduction="batchmean") * (T ** 2)
@@ -158,72 +83,36 @@ def distill_loss(student_logits, teacher_logits, T=2.0):
 # Gradient flow verification
 # ---------------------------------------------------------------------------
 
-def verify_gradient_flow(hybrid):
-    """Print Mamba param gradient norms after step 1.
-
-    Non-zero + finite norms prove gradients flow through mamba-ssm CUDA kernels.
-
-    The accessor chain is:
-        hybrid.layers[i].self_attn          -> MambaAttentionWrapper
-        .mamba                               -> RealMambaBlock
-        .mamba                               -> mamba_ssm.Mamba  (the actual SSM)
-    """
+def verify_gradient_flow(model: LifeEquationModel) -> bool:
+    """Verify non-zero finite gradients exist in all major LE module groups."""
     print("\n--- Gradient Flow Verification (Step 1) ---")
-    any_pass = False
-    checked  = 0
-
-    for plan in hybrid.layer_plan:
-        if plan["kind"] != "mamba":
+    groups = {
+        "mamba_layers":     model.mamba_layers,
+        "pred_heads":       model.pred_heads,
+        "attention_module": model.attention_module,
+        "identity_module":  model.identity_module,
+        "value_module":     model.value_module,
+        "controller":       model.controller,
+    }
+    all_pass = True
+    for group_name, module in groups.items():
+        params_with_grad = [
+            (n, p) for n, p in module.named_parameters()
+            if p.grad is not None
+        ]
+        if not params_with_grad:
+            print(f"  [!!] {group_name}: no gradients")
+            all_pass = False
             continue
-        idx     = plan["layer_idx"]
-        wrapper = hybrid.adapter.get_attention(hybrid.layers[idx])
-        mamba   = wrapper.mamba        # RealMambaBlock
-        ssm     = mamba.mamba          # mamba_ssm.Mamba
-
-        for name, p in ssm.named_parameters():
-            if p.grad is None:
-                print(f"  [!!] layer {idx:2d}.{name}: grad is None")
-                checked += 1
-                continue
-            norm = p.grad.data.norm(2).item()
-            ok   = math.isfinite(norm) and norm > 0
-            if ok:
-                any_pass = True
-            tag = "OK" if ok else ("NaN" if not math.isfinite(norm) else "ZERO")
-            # Only print first layer verbosely to keep output manageable
-            if idx == hybrid.layer_plan[1]["layer_idx"]:
-                print(f"  [{tag}] layer {idx:2d}.{name}: grad_norm={norm:.4e}")
-            checked += 1
-
-    # Sink tokens
-    if hybrid.sink_tokens.sinks.grad is not None:
-        snorm = hybrid.sink_tokens.sinks.grad.norm().item()
-        print(f"  sink_tokens.sinks: grad_norm={snorm:.4e}")
-
-    if any_pass:
-        print("\nGradient flow: PASS — mamba-ssm backward kernels are live")
-    else:
-        print("\nGradient flow: FAIL — all Mamba gradients are zero or None")
-        print("  Check: student is not inside torch.no_grad(); autocast is applied correctly")
-    return any_pass
-
-
-# ---------------------------------------------------------------------------
-# Generation test
-# ---------------------------------------------------------------------------
-
-def run_generation_test(hybrid, tokenizer, device, label=""):
-    prompt = "def add(a, b):"
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    hybrid.eval()
-    with torch.no_grad():
-        gen_ids = hybrid.generate(inputs["input_ids"], max_new_tokens=40)
-    text = tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-    hybrid.train()
-    tag = f" ({label})" if label else ""
-    print(f"\nGeneration{tag}:")
-    print(f"  Prompt:    {prompt}")
-    print(f"  Generated: {text[:300]}")
+        norms = [p.grad.norm().item() for _, p in params_with_grad]
+        mean_norm = sum(norms) / len(norms)
+        ok = math.isfinite(mean_norm) and mean_norm > 0
+        tag = "OK" if ok else ("NaN" if not math.isfinite(mean_norm) else "ZERO")
+        print(f"  [{tag}] {group_name}: mean_grad_norm={mean_norm:.4e}  ({len(params_with_grad)} params)")
+        if not ok:
+            all_pass = False
+    print(f"\nGradient flow: {'PASS' if all_pass else 'FAIL'}")
+    return all_pass
 
 
 # ---------------------------------------------------------------------------
@@ -231,17 +120,18 @@ def run_generation_test(hybrid, tokenizer, device, label=""):
 # ---------------------------------------------------------------------------
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Step 3: Distillation training")
-    p.add_argument("--teacher",      default="Qwen/Qwen2.5-3B")
-    p.add_argument("--student",      default="Qwen/Qwen2.5-0.5B")
-    p.add_argument("--steps",        type=int,   default=500)
-    p.add_argument("--lr",           type=float, default=5e-5)
-    p.add_argument("--seq-len",      type=int,   default=512)
-    p.add_argument("--temperature",  type=float, default=2.0)
-    p.add_argument("--batch-size",   type=int,   default=1,
-                   help="Batches per step (each batch = seq-len tokens)")
-    p.add_argument("--log-every",    type=int,   default=10)
-    p.add_argument("--out",          default="checkpoints/step3.pt")
+    p = argparse.ArgumentParser(description="Step 3 (LE v15): Single-variant distillation")
+    p.add_argument("--teacher",     default="Qwen/Qwen2.5-7B")
+    p.add_argument("--tokenizer",   default="Qwen/Qwen2.5-1.5B",
+                   help="Tokenizer to use (must match LE config vocab_size=151936)")
+    p.add_argument("--steps",       type=int,   default=500)
+    p.add_argument("--lr",          type=float, default=5e-5)
+    p.add_argument("--seq-len",     type=int,   default=1024)
+    p.add_argument("--temperature", type=float, default=2.0)
+    p.add_argument("--d-state",     type=int,   default=64,
+                   help="LE model d_state (spec default: 64)")
+    p.add_argument("--log-every",   type=int,   default=10)
+    p.add_argument("--out",         default="checkpoints/step3_le.pt")
     return p.parse_args()
 
 
@@ -255,78 +145,86 @@ def main():
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
-    # --- AMP dtype ---
     amp_dtype  = get_amp_dtype()
     use_scaler = (amp_dtype == torch.float16)
     dtype_name = "bfloat16" if amp_dtype == torch.bfloat16 else "float16"
-    print(f"AMP dtype: {dtype_name}  |  GradScaler: {'yes' if use_scaler else 'no (bfloat16 — not needed)'}")
+    print(f"AMP dtype: {dtype_name}")
 
-    # --- Build models ---
-    teacher = build_teacher(args, device, amp_dtype)
-    student = build_student(args, device)
+    # --- Build LE student ---
+    print(f"\nBuilding LifeEquationModel (d_state={args.d_state})...")
+    config  = LifeEquationConfig(d_state=args.d_state, device=str(device))
+    student = LifeEquationModel(config).to(device)
+    student.train()
+    total_p  = sum(p.numel() for p in student.parameters())
+    print(f"  Total params: {total_p:,}")
 
-    # Tokenizer (Qwen2.5-0.5B and 3B share the same tokenizer)
-    tokenizer = AutoTokenizer.from_pretrained(args.student)
+    # --- Load teacher ---
+    print(f"\nLoading teacher: {args.teacher} ({dtype_name})...")
+    teacher = AutoModelForCausalLM.from_pretrained(
+        args.teacher, torch_dtype=amp_dtype
+    ).to(device)
+    teacher.eval()
+    for p in teacher.parameters():
+        p.requires_grad_(False)
+    print("Teacher loaded.")
+
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # --- Pre-training generation ---
-    run_generation_test(student, tokenizer, device, label="pre-training")
+    # --- Optimizer ---
+    trainable = [p for p in student.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=0.01)
+    scaler    = torch.amp.GradScaler("cuda") if use_scaler else None
 
-    # --- Optimizer (AdamW on trainable params only) ---
-    trainable_params = [p for p in student.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
-
-    scaler = torch.amp.GradScaler("cuda") if use_scaler else None
-
-    # --- Dataset ---
+    # --- Data ---
     data_gen = make_token_chunks(tokenizer, args.seq_len)
 
-    def next_batch():
-        """Return [batch_size, seq_len] input_ids, restarting generator if needed."""
+    def next_chunk():
         nonlocal data_gen
-        chunks = []
-        for _ in range(args.batch_size):
-            try:
-                chunks.append(next(data_gen))
-            except StopIteration:
-                data_gen = make_token_chunks(tokenizer, args.seq_len)
-                chunks.append(next(data_gen))
-        return torch.stack(chunks).to(device)  # [batch, seq_len]
+        try:
+            return next(data_gen)
+        except StopIteration:
+            data_gen = make_token_chunks(tokenizer, args.seq_len)
+            return next(data_gen)
 
-    # --- Training loop ---
-    print(f"\nStarting distillation: {args.steps} steps | "
-          f"lr={args.lr} | T={args.temperature} | seq_len={args.seq_len}")
+    # --- Training state (persistent across steps) ---
+    le_state = student.init_state(batch_size=1)
+
+    print(f"\nStarting distillation: {args.steps} steps | lr={args.lr} | T={args.temperature}")
     print("=" * 60)
 
-    loss_step1   = None
-    loss_last    = None
+    loss_step1    = None
+    loss_last     = None
     grad_verified = False
 
     for step in range(1, args.steps + 1):
-        input_ids = next_batch()   # [batch, seq_len]
+        input_ids = next_chunk().unsqueeze(0).to(device)   # [1, seq_len]
 
-        # Teacher forward (no grad, stays float16)
         with torch.no_grad():
-            teacher_logits = teacher(input_ids=input_ids).logits  # [batch, seq_len, vocab]
+            teacher_last = teacher(input_ids=input_ids).logits[:, -1, :].float()
 
-        # Student forward (AMP float16)
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", dtype=amp_dtype):
-            full_logits = student(input_ids)                       # [batch, num_sinks+seq_len, vocab]
-            # Remove sink token positions to align with teacher
-            student_logits = full_logits[:, student.num_sinks:, :] # [batch, seq_len, vocab]
+            outputs = student(input_ids, state=le_state, step=step)
 
-        # KL loss in float32 (softmax over 151,936 tokens underflows in float16/bfloat16)
-        loss = distill_loss(
-            student_logits.float(),
-            teacher_logits.float(),
-            T=args.temperature,
+        if outputs.action == "VOLUNTARY_END":
+            print(f"  Step {step}: VOLUNTARY_END — resetting state.")
+            le_state = student.init_state(batch_size=1)
+            continue
+
+        # Detach state for truncated BPTT
+        le_state = FullState(
+            **{k: (v.detach() if isinstance(v, torch.Tensor) else v)
+               for k, v in vars(outputs.state).items()}
         )
 
+        kl   = kl_distill_loss(outputs.logits.float(), teacher_last, T=args.temperature)
+        loss = kl + outputs.losses["L_total"]
+
         if not torch.isfinite(loss):
-            print(f"Step {step}: NaN/Inf loss — stopping. Check LR or model state.")
+            print(f"Step {step}: NaN/Inf loss — stopping.")
             break
 
         if use_scaler:
@@ -335,12 +233,11 @@ def main():
         else:
             loss.backward()
 
-        # Gradient flow verification on step 1
         if step == 1 and not grad_verified:
             grad_verified = verify_gradient_flow(student)
             print()
 
-        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
 
         if use_scaler:
             scaler.step(optimizer)
@@ -349,47 +246,35 @@ def main():
             optimizer.step()
 
         loss_val = loss.item()
-        if step == 1:
+        if loss_step1 is None:
             loss_step1 = loss_val
         loss_last = loss_val
 
-        # Compute total gradient norm for logging
-        with torch.no_grad():
-            grad_norm = math.sqrt(
-                sum(p.grad.norm().item() ** 2
-                    for p in trainable_params
-                    if p.grad is not None)
-            )
-
         if step % args.log_every == 0 or step == 1:
-            print(f"Step {step:4d}/{args.steps} | loss={loss_val:.4f} | grad_norm={grad_norm:.4f}")
+            kl_val = kl.item()
+            l_reg  = outputs.losses.get("L_reg", torch.tensor(0.0)).item()
+            print(f"Step {step:4d}/{args.steps} | loss={loss_val:.4f} | "
+                  f"kl={kl_val:.4f} | L_reg={l_reg:.4f}")
 
     # --- Summary ---
     print("\n" + "=" * 60)
     print("TRAINING SUMMARY")
     print("=" * 60)
-    print(f"  Loss at step 1:    {loss_step1:.4f}")
+    print(f"  Loss at step 1:      {loss_step1:.4f}")
     print(f"  Loss at step {args.steps}: {loss_last:.4f}")
-    decreased = loss_last < loss_step1
-    print(f"  Loss decreased:    {'YES' if decreased else 'NO — check gradient flow'}")
-    print(f"  Gradient verified: {'YES' if grad_verified else 'NO'}")
-
-    all_pass = decreased and grad_verified
+    decreased = loss_last is not None and loss_step1 is not None and loss_last < loss_step1
+    print(f"  Loss decreased:      {'YES' if decreased else 'NO'}")
+    print(f"  Gradient flow:       {'PASS' if grad_verified else 'FAIL'}")
     print()
-    if all_pass:
-        print("PASS — Mamba distillation scaffold works.")
+    if decreased and grad_verified:
+        print("PASS — LE distillation scaffold works.")
     else:
         print("ISSUES DETECTED — see above.")
 
-    # --- Save checkpoint ---
-    torch.save(student.state_dict(), args.out)
+    # Save model weights only (LE state is ephemeral during step 3)
+    torch.save({"model_state": student.state_dict(), "step": args.steps}, args.out)
     print(f"\nCheckpoint saved: {args.out}")
-
-    # --- Post-training generation ---
-    run_generation_test(student, tokenizer, device, label="post-training")
-
     print("\nStep 3 complete.")
-    return all_pass
 
 
 if __name__ == "__main__":

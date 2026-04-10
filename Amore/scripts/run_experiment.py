@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
-"""Step 4: d_state gradient experiment — 4-variant head-to-head comparison.
+"""Step 4 (LE v15): Life Equation variant experiment.
 
-Trains four Mamba hybrid configurations under identical distillation conditions
-and compares validation loss to answer: does an exponential d_state schedule
-(Variant D) outperform uniform d_state (Variant A)?
-
-Key improvements over v1:
-  - Data pre-tokenized once, shared across all variants (fair + fast)
-  - Held-out validation set evaluated every --eval-every steps (clean signal)
-  - EMA-smoothed training loss display
-  - LR warmup (first 200 steps) to stabilise variant D's larger layers
-  - Optional gradient accumulation (--grad-accum) for even smoother updates
-  - Comparison table driven by val loss, not noisy per-step training loss
+Trains seven LifeEquationModel configurations under identical distillation
+conditions to answer:
+  1. How does d_state (state capacity) affect prediction quality?
+  2. Does the v15 autonomy principle (identity emancipation, mutable values)
+     help or hurt during the Ouroboros validation phase?
 
 Variants:
-    A          — uniform small:   d_state=16  for all 18 Mamba layers
-    B          — uniform large:   d_state=64  for all 18 Mamba layers
-    C          — three-tier:      d_state 16 (×6), 64 (×6), 128 (×6)
-    D_constant — exponential [16→256] + per-layer constant gate sigmoid(γ_i)
-    D_proper   — exponential [16→256] + shared-β depth gate sigmoid(β·depth + γ_i)
+    A          — d_state=16  (capacity floor)
+    B          — d_state=32  (half capacity)
+    C          — d_state=64  (spec default)
+    D          — d_state=128 (double capacity)
+    C_no_auto  — d_state=64, gamma_0=0 (no identity emancipation — ablation)
+    C_fast     — d_state=64, lambda_mature=1.0 (fast emancipation)
+    C_slow_val — d_state=64, tau_alpha=1000 (near-frozen values)
+
+Key differences from pre-LE run_experiment.py:
+  - Model built from scratch (LifeEquationModel, no pretrained base to convert)
+  - FullState is threaded across training steps and saved in checkpoints
+  - Total loss = KL distillation + L_pred + L_id + L_reg + L_switch + L_ctrl
+  - VOLUNTARY_END action from controller resets state (counted as diagnostic)
+  - State is detached each step (truncated BPTT, same as standard RNN training)
 
 Usage (Colab A100):
-    python scripts/run_experiment.py --steps 10000 --batch-size 8
-    python scripts/run_experiment.py --steps 10000 --batch-size 8 --variants D_constant,D_proper
-
-AMP: bfloat16 on A100/H100 (no GradScaler needed), float16 on T4 (GradScaler).
+    python scripts/run_experiment.py --steps 10000 --batch-size 4
+    python scripts/run_experiment.py --steps 5000 --variants C,C_no_auto,C_fast
 """
 
 import argparse
@@ -33,6 +34,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "V2"))
 
 import torch
 import torch.nn.functional as F
@@ -40,22 +42,66 @@ from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
-from chimera.models.hybrid_model import (
-    HybridChimeraModel,
-    MambaGuidedAttentionWrapper,
-    CrossLayerIndexWrapper,
-    LoopedAttentionWrapper,
-    AttentionContext,
-)
-from chimera.models.beta_mamba import BetaGatedMamba, BetaGated2AMamba, PSoftMambaWrapper
-from chimera.utils.layer_plan import build_layer_plan, ATTN_KEEP_DEFAULTS
+from life_eq_v2.config import LifeEquationConfig
+from life_eq_v2.model import LifeEquationModel, ForwardOutputs
+from life_eq_v2.state import FullState
+
+
+# ---------------------------------------------------------------------------
+# Variant definitions
+# ---------------------------------------------------------------------------
+
+def _make_config(**kwargs) -> LifeEquationConfig:
+    """Build a LifeEquationConfig with field overrides, leaving all others at spec defaults."""
+    import dataclasses
+    defaults = {f.name: f.default if f.default is not dataclasses.MISSING
+                else f.default_factory()
+                for f in dataclasses.fields(LifeEquationConfig)
+                if f.name != "device"}  # device resolved at runtime
+    defaults.update(kwargs)
+    defaults["device"] = "cpu"   # overridden in train_variant before model construction
+    return LifeEquationConfig(**defaults)
+
+
+VARIANTS = {
+    # --- Capacity axis: how much d_state matters ---
+    "A": {
+        "config_kwargs": {"d_state": 16},
+        "label": "d_state=16 (capacity floor)",
+    },
+    "B": {
+        "config_kwargs": {"d_state": 32},
+        "label": "d_state=32 (half capacity)",
+    },
+    "C": {
+        "config_kwargs": {"d_state": 64},
+        "label": "d_state=64 (spec default)",
+    },
+    "D": {
+        "config_kwargs": {"d_state": 128},
+        "label": "d_state=128 (double capacity)",
+    },
+    # --- Autonomy axis: what v15 adds ---
+    "C_no_auto": {
+        "config_kwargs": {"d_state": 64, "gamma_0": 0.0},
+        "label": "d_state=64, no identity emancipation (ablation)",
+    },
+    "C_fast": {
+        "config_kwargs": {"d_state": 64, "lambda_mature": 1.0},
+        "label": "d_state=64, fast emancipation (lambda_mature=1.0)",
+    },
+    "C_slow_val": {
+        "config_kwargs": {"d_state": 64, "tau_alpha": 1000.0},
+        "label": "d_state=64, near-frozen values (tau_alpha=1000)",
+    },
+}
 
 
 # ---------------------------------------------------------------------------
 # AMP dtype detection
 # ---------------------------------------------------------------------------
 
-def get_amp_dtype():
+def get_amp_dtype() -> torch.dtype:
     """bfloat16 on A100/H100 (native HW, no scaler needed), float16 on T4/V100."""
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
         return torch.bfloat16
@@ -63,194 +109,11 @@ def get_amp_dtype():
 
 
 # ---------------------------------------------------------------------------
-# Variant definitions
-# ---------------------------------------------------------------------------
-
-def _snap16(x: float) -> int:
-    """Round x to the nearest multiple of 16 (minimum 16).
-
-    Mamba-3 requires headdim_qk (= d_state) to be even; Triton kernels prefer
-    multiples of 16. Snapping keeps all our target values (32, 64, 96, 128)
-    unchanged while fixing bell/exponential intermediate values (e.g. 53 → 48).
-    """
-    return max(16, round(x / 16) * 16)
-
-
-def make_d_states(spec: dict, n_mamba: int, spans: list | None = None) -> list:
-    """Generate a d_state list for n_mamba layers from a schedule spec.
-
-    Specs:
-        {"type": "uniform",             "d": 64}
-        {"type": "exponential",         "d_min": 64, "d_max": 256}
-        {"type": "three_tier"}           -- uses d=32/64/128 split evenly across thirds
-        {"type": "bell",                "d_min": 64, "d_max": 256}
-            Single U-shape across all Mamba layers.
-        {"type": "bell_per_span",       "d_min": 64, "d_max": 256}
-            Independent U-shape per attention span. Requires spans=.
-        {"type": "bell_per_span_ramped","d_min": 64, "d_max": 256, "tail": [224, 256]}
-            Per-span bell with fixed high-capacity tail layers (preparation phase).
-            Last len(tail) layers of each span are set to tail values. Requires spans=.
-    """
-    t = spec["type"]
-    if t == "uniform":
-        return [spec["d"]] * n_mamba
-    elif t == "exponential":
-        d_min, d_max = spec["d_min"], spec["d_max"]
-        return [
-            _snap16(d_min * (d_max / d_min) ** (i / max(n_mamba - 1, 1)))
-            for i in range(n_mamba)
-        ]
-    elif t == "bell":
-        # Single U-shape across all Mamba layers: d_max at edges, d_min at centre.
-        d_min, d_max = spec["d_min"], spec["d_max"]
-        return [
-            _snap16(d_max - (d_max - d_min) *
-                    (1 - math.cos(2 * math.pi * i / max(n_mamba - 1, 1))) / 2)
-            for i in range(n_mamba)
-        ]
-    elif t == "bell_per_span":
-        # Independent U-shape within each attention span.
-        # d_max at both ends of every span: absorption after attention + preparation before it.
-        if spans is None:
-            raise ValueError("bell_per_span requires spans= (list of Mamba counts per span)")
-        d_min, d_max = spec["d_min"], spec["d_max"]
-        result = []
-        for span_len in spans:
-            for i in range(span_len):
-                d = _snap16(d_max - (d_max - d_min) *
-                            (1 - math.cos(2 * math.pi * i / max(span_len - 1, 1))) / 2)
-                result.append(d)
-        return result
-    elif t == "bell_per_span_ramped":
-        # Per-span bell with explicit high-capacity tail for the preparation phase.
-        # The last len(tail) layers of each span are pinned to tail values (e.g. [96, 128]).
-        # Remaining layers follow a standard bell curve snapped to multiples of 16.
-        # Rationale: H reads relevance from the pre-attention Mamba state — giving those
-        # layers maximum capacity improves H's token selection signal directly.
-        if spans is None:
-            raise ValueError("bell_per_span_ramped requires spans= argument")
-        d_min, d_max = spec["d_min"], spec["d_max"]
-        tail = spec.get("tail", [])
-        result = []
-        for span_len in spans:
-            body_len = max(span_len - len(tail), 1)
-            for i in range(body_len):
-                d = _snap16(d_max - (d_max - d_min) *
-                            (1 - math.cos(2 * math.pi * i / max(body_len - 1, 1))) / 2)
-                result.append(d)
-            result.extend(tail[:span_len - body_len])
-        return result
-    elif t == "three_tier":
-        tier = n_mamba // 3
-        return [32] * tier + [64] * tier + [128] * (n_mamba - 2 * tier)
-    else:
-        raise ValueError(f"Unknown d_state_spec type: {t!r}")
-
-
-VARIANTS = {
-    "A": {
-        "d_state_spec": {"type": "uniform", "d": 16},
-        "gate_mode":    None,
-        "label":        "Uniform small (d=16)",
-    },
-    "B": {
-        "d_state_spec": {"type": "uniform", "d": 32},
-        "gate_mode":    None,
-        "label":        "Uniform (d=32)",
-    },
-    "C": {
-        "d_state_spec": {"type": "three_tier"},
-        "gate_mode":    None,
-        "label":        "Three-tier (d=16/64/128)",
-    },
-    "D_constant": {
-        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 128},
-        "gate_mode":    "constant",
-        "label":        "Exp gradient (32→128) + constant gate",
-    },
-    "D_proper": {
-        "d_state_spec": {"type": "exponential", "d_min": 32, "d_max": 128},
-        "gate_mode":    "shared_beta",
-        "label":        "Exp gradient (32→128) + shared-β depth gate",
-    },
-    "D_bell": {
-        "d_state_spec": {"type": "bell", "d_min": 32, "d_max": 128},
-        "gate_mode":    "constant",
-        "label":        "Global bell (128→32→128) + constant gate",
-    },
-    "D_bell2": {
-        "d_state_spec": {"type": "bell_per_span", "d_min": 32, "d_max": 64},
-        "gate_mode":    "constant",
-        "label":        "Per-span bell (64→32→64 each span) + constant gate",
-    },
-    "D_bell2_32": {
-        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 32, "d_max": 64,
-                         "tail": [96, 128]},
-        "gate_mode":    "constant",
-        "label":        "Per-span bell asymmetric (64→32→64→96→128 each span) + constant gate",
-    },
-    "D_exp_inv": {
-        "d_state_spec": {"type": "exponential", "d_min": 128, "d_max": 32},
-        "gate_mode":    "constant",
-        "label":        "Inv. exponential (128→32) + constant gate",
-    },
-    "B_gated": {
-        "d_state_spec": {"type": "uniform", "d": 64},
-        "gate_mode":    "constant",
-        "label":        "Uniform (d=64) + constant gate",
-    },
-    "B_psoft": {
-        "d_state_spec": {"type": "uniform", "d": 64},
-        "gate_mode":    "constant",
-        "psoft":        True,
-        "label":        "Uniform (d=64) + constant gate + P_soft",
-    },
-    "B_psoft_2A": {
-        "d_state_spec": {"type": "uniform", "d": 64},
-        "gate_mode":    "constant",
-        "gate_2a":      True,
-        "psoft":        True,
-        "label":        "B_psoft + 2A temporal/block gates",
-    },
-    "B_psoft_2H": {
-        "d_state_spec": {"type": "uniform", "d": 64},
-        "gate_mode":    "constant",
-        "psoft":        True,
-        "gate_h":       True,
-        "label":        "B_psoft + 2H Mamba-guided sparse attention",
-    },
-    "B_psoft_2G": {
-        "d_state_spec": {"type": "uniform", "d": 64},
-        "gate_mode":    "constant",
-        "psoft":        True,
-        "gate_g":       True,
-        "label":        "B_psoft + 2G cross-layer index sharing (training-free)",
-    },
-    "B_psoft_2E": {
-        "d_state_spec": {"type": "uniform", "d": 64},
-        "gate_mode":    "constant",
-        "psoft":        True,
-        "gate_e":       True,
-        "label":        "B_psoft + 2E looped attention (4× shared weights + exit gate)",
-    },
-    "D_bell2_32_psoft": {
-        # Floor raised to 64: body=[64×6] + tail=[96,128] per span.
-        # Only the 2 pre-attention layers per span get elevated d_state.
-        "d_state_spec": {"type": "bell_per_span_ramped", "d_min": 64, "d_max": 64,
-                         "tail": [96, 128]},
-        "gate_mode":    "constant",
-        "psoft":        True,
-        "label":        "Per-span d=64 + tail [96,128] + P_soft",
-    },
-}
-
-
-# ---------------------------------------------------------------------------
 # Data: pre-tokenise once, share across all variants
 # ---------------------------------------------------------------------------
 
-def load_data(tokenizer, seq_len, n_train, n_val):
-    """Pre-tokenise wikitext-103 train and test splits into fixed-length chunks.
+def load_data(tokenizer, seq_len: int, n_train: int, n_val: int):
+    """Pre-tokenise wikitext-103 train/test splits into fixed-length chunks.
 
     Returns:
         train_chunks: list of n_train LongTensors, shape [seq_len]
@@ -285,33 +148,71 @@ def load_data(tokenizer, seq_len, n_train, n_val):
 # Loss
 # ---------------------------------------------------------------------------
 
-def distill_loss(student_logits, teacher_logits, T=2.0):
+def kl_distill_loss(student_logits: torch.Tensor, teacher_logits: torch.Tensor, T: float = 2.0) -> torch.Tensor:
     """Temperature-scaled KL with per-token std normalisation.
 
-    Handles teacher/student vocab size mismatch (e.g. Qwen2.5-7B has 152064
-    tokens vs 1.5B's 151936) by truncating to the smaller vocab.
+    Handles teacher/student vocab size mismatch (e.g. Qwen2.5-7B vocab=152064
+    vs LE model vocab=151936) by truncating to the smaller vocab.
+
+    student_logits: [B, vocab]  — LE model outputs last-token prediction
+    teacher_logits: [B, vocab]  — teacher last-token logits
     """
     vocab = min(student_logits.size(-1), teacher_logits.size(-1))
-    student_logits = student_logits[..., :vocab]
-    teacher_logits = teacher_logits[..., :vocab]
-    s = student_logits / (student_logits.std(dim=-1, keepdim=True) + 1e-6)
-    t = teacher_logits / (teacher_logits.std(dim=-1, keepdim=True) + 1e-6)
+    s = student_logits[..., :vocab]
+    t = teacher_logits[..., :vocab]
+    s = s / (s.std(dim=-1, keepdim=True) + 1e-6)
+    t = t / (t.std(dim=-1, keepdim=True) + 1e-6)
     log_p_s = F.log_softmax(s / T, dim=-1)
     p_t     = F.softmax(t / T, dim=-1)
     return F.kl_div(log_p_s, p_t, reduction="batchmean") * (T ** 2)
 
 
 # ---------------------------------------------------------------------------
+# State utilities
+# ---------------------------------------------------------------------------
+
+def detach_state(state: FullState) -> FullState:
+    """Detach all tensors in FullState (truncated BPTT — same as standard RNN training)."""
+    return FullState(
+        **{
+            k: (v.detach() if isinstance(v, torch.Tensor) else v)
+            for k, v in vars(state).items()
+        }
+    )
+
+
+def serialize_state(state: FullState) -> dict:
+    """Convert FullState to a CPU tensor dict suitable for torch.save."""
+    return {
+        k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
+        for k, v in vars(state).items()
+        if k != "manifest"   # manifest is ephemeral; rebuilt on resume
+    }
+
+
+def deserialize_state(d: dict, device: torch.device) -> FullState:
+    """Reconstruct FullState from a serialized dict."""
+    kwargs = {
+        k: (v.to(device) if isinstance(v, torch.Tensor) else v)
+        for k, v in d.items()
+    }
+    kwargs.setdefault("manifest", [])
+    return FullState(**kwargs)
+
+
+# ---------------------------------------------------------------------------
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
 
-def save_checkpoint(path, name, step, student, optimizer, scheduler,
-                    val_log, ema_loss, chunk_idx):
+def save_checkpoint(path: str, name: str, step: int, model: LifeEquationModel,
+                    state: FullState, optimizer, scheduler,
+                    val_log: dict, ema_loss, chunk_idx: int) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     torch.save({
         "variant":         name,
         "step":            step,
-        "model_state":     student.state_dict(),
+        "model_state":     model.state_dict(),
+        "le_state":        serialize_state(state),
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
         "val_log":         val_log,
@@ -321,359 +222,121 @@ def save_checkpoint(path, name, step, student, optimizer, scheduler,
     print(f"  [{name}] Checkpoint saved → {path}")
 
 
-def load_checkpoint(path, name, student, optimizer, scheduler, args):
-    """Load checkpoint. Returns (start_step, val_log, ema_loss, chunk_idx).
+def load_checkpoint(path: str, name: str, model: LifeEquationModel,
+                    optimizer, scheduler, device: torch.device, args) -> tuple:
+    """Returns (start_step, le_state, val_log, ema_loss, chunk_idx).
 
-    If the saved step equals args.steps the checkpoint is a *finished* run —
-    only model weights are restored (warm-start for Round 2). Otherwise full
-    state is restored so an interrupted run continues from where it left off.
+    Crash recovery: saved_step < args.steps → restore full training state.
+    Warm-start:     saved_step >= args.steps → model weights only, fresh state.
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     saved_step = ckpt.get("step", 0)
-    is_crash_recovery = saved_step > 0 and saved_step < args.steps
+    is_crash_recovery = 0 < saved_step < args.steps
 
     if is_crash_recovery:
-        # Attempt strict crash recovery. Falls back to warm-start if the
-        # checkpoint was saved by an older code version that is missing new
-        # parameters (e.g. a B_psoft_2H checkpoint saved before H weights
-        # were correctly registered now being resumed after the H fix).
         try:
-            student.load_state_dict(ckpt["model_state"], strict=True)
+            model.load_state_dict(ckpt["model_state"], strict=True)
         except RuntimeError as e:
             if "Missing key" in str(e) or "Unexpected key" in str(e):
-                print(f"  [{name}] Key mismatch in checkpoint "
-                      f"(model has new params not in checkpoint, or vice versa). "
-                      f"Falling back to warm-start from step {saved_step} weights.")
-                student.load_state_dict(ckpt["model_state"], strict=False)
+                print(f"  [{name}] Key mismatch — falling back to warm-start.")
+                model.load_state_dict(ckpt["model_state"], strict=False)
                 is_crash_recovery = False
             else:
                 raise
     else:
-        student.load_state_dict(ckpt["model_state"], strict=False)
+        model.load_state_dict(ckpt["model_state"], strict=False)
 
     if is_crash_recovery:
-        # Crash-recovery: restore full training state
         optimizer.load_state_dict(ckpt["optimizer_state"])
         scheduler.load_state_dict(ckpt["scheduler_state"])
+        le_state = deserialize_state(ckpt["le_state"], device)
         print(f"  [{name}] Resumed from step {saved_step}/{args.steps} (crash recovery)")
-        return (saved_step,
-                ckpt.get("val_log", {}),
-                ckpt.get("ema_loss", None),
-                ckpt.get("chunk_idx", 0))
+        return (saved_step, le_state,
+                ckpt.get("val_log", {}), ckpt.get("ema_loss", None), ckpt.get("chunk_idx", 0))
     else:
-        # Warm-start: model weights only, reset optimizer/scheduler/counters
-        print(f"  [{name}] Warm-started from '{path}' (model weights only)")
-        return 0, {}, None, 0
+        le_state = model.init_state(batch_size=args.batch_size)
+        print(f"  [{name}] Warm-started from '{path}' (model weights only, fresh state)")
+        return 0, le_state, {}, None, 0
 
 
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
-def evaluate(student, teacher, val_chunks, device, temperature, amp_dtype):
-    """Compute mean distillation loss on the held-out val set (no grad)."""
-    student.eval()
+def evaluate(model: LifeEquationModel, teacher, val_chunks: list,
+             device: torch.device, temperature: float, amp_dtype: torch.dtype) -> float:
+    """Mean KL distillation loss on held-out val set (no grad, fresh state per chunk)."""
+    model.eval()
     total = 0.0
     with torch.no_grad():
         for chunk in val_chunks:
-            input_ids = chunk.unsqueeze(0).to(device)
-            teacher_logits = teacher(input_ids=input_ids).logits
+            input_ids = chunk.unsqueeze(0).to(device)   # [1, seq_len]
+            teacher_logits = teacher(input_ids=input_ids).logits  # [1, seq_len, vocab]
             with torch.amp.autocast("cuda", dtype=amp_dtype):
-                full_logits    = student(input_ids)
-                student_logits = full_logits[:, student.num_sinks:, :]
-            loss = distill_loss(student_logits.float(), teacher_logits.float(), temperature)
-            total += loss.item()
-    student.train()
-    return total / len(val_chunks)
-
-
-# ---------------------------------------------------------------------------
-# Student builder
-# ---------------------------------------------------------------------------
-
-def build_variant_student(args, cfg, device):
-    """Build HybridChimeraModel for one variant with the correct d_state schedule."""
-    import torch.nn as nn
-
-    base = AutoModelForCausalLM.from_pretrained(
-        args.student, dtype=torch.float32
-    ).to(device)
-
-    # Resolve attention layer indices — explicit override or model-type default
-    if args.attn_indices is not None:
-        attn_keep = {int(x) for x in args.attn_indices.split(",")}
-    else:
-        attn_keep = None  # build_layer_plan uses model-type preset
-
-    effective_attn = (
-        attn_keep if attn_keep is not None
-        else ATTN_KEEP_DEFAULTS.get(base.config.model_type, {0, 3, 7, 11})
-    )
-    n_mamba  = base.config.num_hidden_layers - len(effective_attn)
-
-    # bell_per_span needs span sizes derived from the attention layer positions
-    spans = None
-    if cfg["d_state_spec"]["type"] in ("bell_per_span", "bell_per_span_ramped"):
-        n_layers   = base.config.num_hidden_layers
-        mamba_set  = set(range(n_layers)) - effective_attn
-        boundaries = [-1] + sorted(effective_attn) + [n_layers]
-        spans = [
-            sum(1 for l in mamba_set if boundaries[i] < l < boundaries[i + 1])
-            for i in range(len(boundaries) - 1)
-        ]
-        spans = [s for s in spans if s > 0]  # drop empty gaps (e.g. adjacent attn layers)
-
-    d_states = make_d_states(cfg["d_state_spec"], n_mamba, spans=spans)
-    print(f"  Attn layers: {sorted(effective_attn)}  "
-          f"({len(effective_attn)} attn, {n_mamba} Mamba) | "
-          f"d_state: {d_states[0]}→{d_states[-1]}")
-
-    layer_plan = build_layer_plan(
-        base.config.num_hidden_layers,
-        attn_keep_indices=attn_keep,
-        model_type=base.config.model_type,
-        d_state=d_states,
-    )
-
-    hybrid = HybridChimeraModel(base, layer_plan, num_sinks=4, device=str(device))
-
-    # Gate variants: wrap Mamba blocks with BetaGatedMamba (or 2A) BEFORE freeze
-    gate_mode = cfg.get("gate_mode")
-    gate_2a   = cfg.get("gate_2a", False)
-    if gate_mode in ("constant", "shared_beta"):
-        total_mamba = sum(1 for p in hybrid.layer_plan if p["kind"] == "mamba")
-        shared_beta = nn.Parameter(torch.zeros(1)) if gate_mode == "shared_beta" else None
-        d_model = base.config.hidden_size
-
-        if gate_2a:
-            hybrid.gate2a_sparsity_accum = []
-            hybrid.gate2a_stats_accum    = []
-
-        mamba_idx = 0
-        for plan in hybrid.layer_plan:
-            if plan["kind"] == "mamba":
-                wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-                if gate_2a:
-                    wrapper.mamba = BetaGated2AMamba(
-                        wrapper.mamba, mamba_idx, total_mamba,
-                        d_model=d_model,
-                        d_state=d_states[mamba_idx],
-                        sparsity_accum=hybrid.gate2a_sparsity_accum,
-                        stats_accum=hybrid.gate2a_stats_accum,
-                        shared_beta=shared_beta,
-                    )
-                else:
-                    wrapper.mamba = BetaGatedMamba(
-                        wrapper.mamba, mamba_idx, total_mamba, shared_beta=shared_beta
-                    )
-                mamba_idx += 1
-        if shared_beta is not None:
-            hybrid.register_parameter("shared_beta", shared_beta)
-
-    # P_soft: wrap BetaGatedMamba with error-driven input (must be AFTER gate wrapping)
-    # Creates a shared loss accumulator on the model; training loop reads it each step.
-    hybrid.psoft_loss_accum = []
-    if cfg.get("psoft"):
-        d_model = base.config.hidden_size
-        for plan in hybrid.layer_plan:
-            if plan["kind"] == "mamba":
-                wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-                wrapper.mamba = PSoftMambaWrapper(
-                    wrapper.mamba, d_model, loss_accum=hybrid.psoft_loss_accum
-                )
-
-    # Round 2H: Mamba-guided sparse attention
-    # Wraps attention layers (except layer 0) with MambaGuidedAttentionWrapper.
-    # Preceding Mamba reference is wired so each guided layer reads _last_out
-    # from the Mamba wrapper immediately before it in the layer sequence.
-    gate_h = cfg.get("gate_h", False)
-    if gate_h:
-        hybrid.h_align_accum = []
-        hybrid.h_stats_accum = []
-        hybrid.h_step_ref    = [0]   # updated by training loop before each forward
-
-        last_mamba = None
-        for plan in hybrid.layer_plan:
-            layer = hybrid.layers[plan["layer_idx"]]
-            if plan["kind"] == "mamba":
-                last_mamba = hybrid.adapter.get_attention(layer)
-            elif plan["kind"] == "attn" and last_mamba is not None:
-                orig_attn = hybrid.adapter.get_attention(layer)
-                guided = MambaGuidedAttentionWrapper(
-                    orig_attn,
-                    d_model=d_model,
-                    align_accum=hybrid.h_align_accum,
-                    stats_accum=hybrid.h_stats_accum,
-                    step_ref=hybrid.h_step_ref,
-                )
-                # Use object.__setattr__ to mirror the pattern in __init__:
-                # keeps _preceding_mamba out of _modules so it doesn't
-                # create a competing submodule path to the Mamba weights.
-                object.__setattr__(guided, "_preceding_mamba", last_mamba)
-                hybrid.adapter.set_attention(layer, guided)
-                # Diagnostic: confirm wrapper placement and param registration
-                n_params = sum(p.numel() for p in guided.parameters())
-                print(f"  [H] Layer {plan['layer_idx']:2d}: "
-                      f"MambaGuidedAttentionWrapper registered, "
-                      f"params={n_params:,} "
-                      f"(W_q_rel={guided.W_q_rel.weight.numel()}, "
-                      f"W_k_rel={guided.W_k_rel.weight.numel()})")
-
-    # Round 2G: cross-layer index sharing (no trainable params — training-free)
-    # Layer 0 is skipped (no preceding Mamba). First attn layer with a preceding
-    # Mamba becomes "full" (writes cache); all subsequent attn layers become "shared".
-    gate_g = cfg.get("gate_g", False)
-    if gate_g:
-        hybrid.g_stats_accum = []
-        hybrid.g_attn_ctx    = AttentionContext()
-
-        last_mamba  = None
-        first_attn_with_mamba_seen = False
-        for plan in hybrid.layer_plan:
-            layer = hybrid.layers[plan["layer_idx"]]
-            if plan["kind"] == "mamba":
-                last_mamba = hybrid.adapter.get_attention(layer)
-            elif plan["kind"] == "attn":
-                if last_mamba is None:
-                    continue   # layer 0: no preceding Mamba → leave untouched
-                role = "full" if not first_attn_with_mamba_seen else "shared"
-                first_attn_with_mamba_seen = True
-                orig_attn = hybrid.adapter.get_attention(layer)
-                g_wrapper = CrossLayerIndexWrapper(
-                    orig_attn,
-                    preceding_mamba=last_mamba,
-                    attn_ctx=hybrid.g_attn_ctx,
-                    role=role,
-                    layer_idx=plan["layer_idx"],
-                    stats_accum=hybrid.g_stats_accum,
-                )
-                hybrid.adapter.set_attention(layer, g_wrapper)
-                print(f"  [G] Layer {plan['layer_idx']:2d}: CrossLayerIndexWrapper "
-                      f"role={role!r}")
-
-    # Round 2E: looped attention (exit gate is the only new trainable param)
-    # Layer 0 is skipped (anchor — no preceding Mamba context to refine against).
-    # All other attention layers get a LoopedAttentionWrapper with shared weights
-    # across up to _MAX_LOOPS iterations and an independent per-layer exit gate.
-    gate_e = cfg.get("gate_e", False)
-    if gate_e:
-        hybrid.e_exit_accum  = []
-        hybrid.e_stats_accum = []
-        d_model_e = base.config.hidden_size  # safe even if gate_mode block didn't run
-        for plan in hybrid.layer_plan:
-            if plan["kind"] != "attn" or plan["layer_idx"] == 0:
-                continue
-            layer     = hybrid.layers[plan["layer_idx"]]
-            orig_attn = hybrid.adapter.get_attention(layer)
-            e_wrapper = LoopedAttentionWrapper(
-                orig_attn,
-                d_model=d_model_e,
-                exit_accum=hybrid.e_exit_accum,
-                stats_accum=hybrid.e_stats_accum,
-                layer_idx=plan["layer_idx"],
+                # Fresh state per val chunk — measures single-pass prediction quality
+                state = model.init_state(batch_size=1)
+                outputs = model(input_ids, state=state, step=0)
+            if outputs.logits is None:
+                continue   # VOLUNTARY_END during val (shouldn't happen at step=0)
+            loss = kl_distill_loss(
+                outputs.logits.float(),
+                teacher_logits[:, -1, :].float(),
+                T=temperature,
             )
-            hybrid.adapter.set_attention(layer, e_wrapper)
-            print(f"  [E] Layer {plan['layer_idx']:2d}: LoopedAttentionWrapper registered "
-                  f"(max_loops={LoopedAttentionWrapper._MAX_LOOPS}, "
-                  f"exit_gate_params={e_wrapper.exit_gate.weight.numel() + 1})")
+            total += loss.item()
+    model.train()
+    return total / max(len(val_chunks), 1)
 
-    # Freeze all, then unfreeze Mamba wrappers + sink tokens
-    for p in hybrid.parameters():
-        p.requires_grad_(False)
-    for plan in hybrid.layer_plan:
-        if plan["kind"] == "mamba":
-            wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-            for p in wrapper.parameters():
-                p.requires_grad_(True)
-    hybrid.sink_tokens.sinks.requires_grad_(True)
-    # shared_beta is registered on hybrid (not on any wrapper) — unfreeze explicitly
-    if hasattr(hybrid, "shared_beta"):
-        hybrid.shared_beta.requires_grad_(True)
-    # H: unfreeze only the relevance projections (original_attn stays frozen)
-    if gate_h:
-        for plan in hybrid.layer_plan:
-            if plan["kind"] == "attn":
-                wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-                if isinstance(wrapper, MambaGuidedAttentionWrapper):
-                    wrapper.W_q_rel.weight.requires_grad_(True)
-                    wrapper.W_k_rel.weight.requires_grad_(True)
-    # G: no new parameters — training-free
-    # E: unfreeze only the exit gates (original_attn stays frozen)
-    if gate_e:
-        for plan in hybrid.layer_plan:
-            if plan["kind"] == "attn":
-                wrapper = hybrid.adapter.get_attention(hybrid.layers[plan["layer_idx"]])
-                if isinstance(wrapper, LoopedAttentionWrapper):
-                    wrapper.exit_gate.weight.requires_grad_(True)
-                    wrapper.exit_gate.bias.requires_grad_(True)
 
-    hybrid = hybrid.to(device)
-    hybrid.train()
+# ---------------------------------------------------------------------------
+# Diagnostics summary
+# ---------------------------------------------------------------------------
 
-    trainable = sum(p.numel() for p in hybrid.parameters() if p.requires_grad)
-    total     = sum(p.numel() for p in hybrid.parameters())
-    print(f"  Trainable params: {trainable:,} / {total:,}")
-    return hybrid
+def _diag_summary(outputs: ForwardOutputs) -> str:
+    """One-line diagnostic string from ForwardOutputs (shown at eval steps)."""
+    d = outputs.diagnostics
+    parts = []
+    if "gamma_eff" in d:
+        parts.append(f"γ_eff={d['gamma_eff'].mean().item():.3f}")
+    if "mu_val" in d:
+        parts.append(f"μ_val={d['mu_val'].mean().item():.3f}")
+    if "v_self" in d:
+        parts.append(f"V_self={d['v_self'].mean().item():.3f}")
+    if "coherence" in d:
+        parts.append(f"coh={d['coherence'].mean().item():.3f}")
+    if "boredom" in d:
+        parts.append(f"bore={d['boredom'].mean().item():.3f}")
+    return "  ".join(parts)
 
 
 # ---------------------------------------------------------------------------
 # Training loop for one variant
 # ---------------------------------------------------------------------------
 
-def _alpha_summary(student, cfg) -> str:
-    """Return a compact one-line string of α values grouped by Mamba span.
-
-    Example:  α  [.485 .467 .450 .446 .447 .451 .480 .461] | [.444 .460 ... .467] | [.467 ... .485]
-    The last value in each bracket is the layer just before an attention boundary.
-    """
-    gate_mode = cfg.get("gate_mode")
-    if gate_mode not in ("constant", "shared_beta"):
-        return ""
-
-    # Collect (layer_idx, alpha) for all Mamba layers in order
-    entries = []
-    for plan in student.layer_plan:
-        if plan["kind"] == "mamba":
-            wrapper = student.adapter.get_attention(student.layers[plan["layer_idx"]])
-            bg = wrapper.mamba
-            if gate_mode == "shared_beta":
-                a = torch.sigmoid(student.shared_beta * bg.depth + bg.gamma).item()
-            else:
-                a = torch.sigmoid(bg.gamma).item()
-            entries.append((plan["layer_idx"], a))
-
-    if not entries:
-        return ""
-
-    # Group into spans separated by attention boundaries
-    # A new span starts whenever layer indices are non-consecutive
-    spans, current = [], []
-    for i, (li, a) in enumerate(entries):
-        if i > 0 and li != entries[i - 1][0] + 1:
-            spans.append(current)
-            current = []
-        current.append(a)
-    if current:
-        spans.append(current)
-
-    span_strs = ["[" + " ".join(f"{a:.3f}" for a in s) + "]" for s in spans]
-    return "α  " + " | ".join(span_strs)
-
-
-def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, amp_dtype, effective_lr):
+def train_variant(name: str, cfg: dict, args, teacher,
+                  train_chunks: list, val_chunks: list,
+                  device: torch.device, amp_dtype: torch.dtype,
+                  effective_lr: float) -> dict:
     """Train one variant. Returns dict of val losses keyed by step."""
     print(f"\n{'='*60}")
     print(f"Variant {name}: {cfg['label']}")
     print(f"{'='*60}")
 
-    student          = build_variant_student(args, cfg, device)
-    trainable_params = [p for p in student.parameters() if p.requires_grad]
-    optimizer        = AdamW(trainable_params, lr=effective_lr, weight_decay=0.01)
-    use_scaler       = (amp_dtype == torch.float16)
-    scaler           = torch.amp.GradScaler("cuda") if use_scaler else None
+    # Build model with device-aware config
+    import dataclasses
+    config = LifeEquationConfig(
+        **{**cfg["config_kwargs"], "device": str(device)}
+    )
+    model = LifeEquationModel(config).to(device)
+    model.train()
 
-    # Warmup then cosine decay: ramps to peak LR over warmup_steps, then decays to ~0
-    warmup_steps = min(200, args.steps // 10)
+    total_params   = sum(p.numel() for p in model.parameters())
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    print(f"  Total params: {total_params:,}  |  Trainable: {sum(p.numel() for p in trainable_params):,}")
+
+    optimizer = AdamW(trainable_params, lr=effective_lr, weight_decay=0.01)
+
+    warmup_steps = min(args.warmup_steps, args.steps // 10)
     total_steps  = args.steps
 
     def lr_schedule(s):
@@ -684,252 +347,190 @@ def train_variant(name, cfg, args, teacher, train_chunks, val_chunks, device, am
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_schedule)
 
-    val_log     = {}
-    ema_loss    = None
-    ema_alpha   = 0.95
-    chunk_idx   = 0
+    # Initialise persistent FullState for this variant
+    le_state   = model.init_state(batch_size=args.batch_size)
+    val_log    = {}
+    ema_loss   = None
+    ema_alpha  = 0.95
+    chunk_idx  = 0
     accum_steps = 0
-    start_step  = 0
+    start_step = 0
+    last_outputs: ForwardOutputs | None = None
+    vol_end_count = 0   # how many times VOLUNTARY_END fired this variant
 
     # Resume from checkpoint if requested
     if args.resume:
-        start_step, val_log, ema_loss, chunk_idx = load_checkpoint(
-            args.resume, name, student, optimizer, scheduler, args
+        start_step, le_state, val_log, ema_loss, chunk_idx = load_checkpoint(
+            args.resume, name, model, optimizer, scheduler, device, args
         )
 
-    # Checkpoint output path (save_dir/<name>_final.pt and mid-run)
     save_dir = args.save_dir
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
 
-    # Initial validation (skip if resuming mid-run — already have val_log)
+    # Initial validation
     if start_step == 0:
         print(f"  [{name}] Step 0 — initial val loss...")
-        val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
+        val_loss = evaluate(model, teacher, val_chunks, device, args.temperature, amp_dtype)
         val_log[0] = val_loss
         print(f"  [{name}] Step    0/{args.steps} | val={val_loss:.4f}  (pre-training)")
 
     for step in range(start_step + 1, args.steps + 1):
+        # --- Assemble batch ---
         batch_chunks = [
             train_chunks[(chunk_idx + i) % len(train_chunks)]
             for i in range(args.batch_size)
         ]
-        input_ids = torch.stack(batch_chunks).to(device)   # [batch_size, seq_len]
+        input_ids = torch.stack(batch_chunks).to(device)   # [B, seq_len]
         chunk_idx += args.batch_size
 
-        # Update H step counter before forward so MambaGuidedAttentionWrapper
-        # sees the correct phase (dense vs sparse)
-        if hasattr(student, "h_step_ref"):
-            student.h_step_ref[0] = step
-
-        # Teacher forward
+        # --- Teacher forward (no grad) ---
         with torch.no_grad():
-            teacher_logits = teacher(input_ids=input_ids).logits
+            teacher_out = teacher(input_ids=input_ids)
+            teacher_last = teacher_out.logits[:, -1, :].float()   # [B, vocab]
 
-        # Student forward
+        # --- Student forward ---
         with torch.amp.autocast("cuda", dtype=amp_dtype):
-            full_logits    = student(input_ids)
-            student_logits = full_logits[:, student.num_sinks:, :]
+            outputs = model(
+                input_ids,
+                state=le_state,
+                step=step,
+                consolidating=False,
+            )
 
-        loss = distill_loss(
-            student_logits.float(),
-            teacher_logits.float(),
-            T=args.temperature,
-        )
+        # --- Handle VOLUNTARY_END ---
+        if outputs.action == "VOLUNTARY_END":
+            vol_end_count += 1
+            print(f"  [{name}] Step {step}: VOLUNTARY_END — resetting state "
+                  f"(count={vol_end_count})")
+            le_state = model.init_state(batch_size=args.batch_size)
+            continue   # no loss to backprop this step
 
-        # P_soft prediction loss — accumulated by PSoftMambaWrapper during forward
-        psoft_accum = getattr(student, "psoft_loss_accum", [])
-        if psoft_accum:
-            loss_pc = sum(psoft_accum) / len(psoft_accum)
-            loss = loss + args.lambda_pc * loss_pc
-            psoft_accum.clear()
+        # --- Thread state (detach for truncated BPTT) ---
+        le_state = detach_state(outputs.state)
+        last_outputs = outputs
 
-        # Round 2A gate sparsity loss — accumulated by BetaGated2AMamba during forward
-        gate2a_sparsity = getattr(student, "gate2a_sparsity_accum", [])
-        if gate2a_sparsity:
-            loss = loss + sum(gate2a_sparsity)
-            gate2a_sparsity.clear()
+        # --- Compute loss ---
+        kl = kl_distill_loss(outputs.logits.float(), teacher_last, T=args.temperature)
 
-        # Round 2H alignment loss — entropy reg on relevance distributions
-        h_align = getattr(student, "h_align_accum", [])
-        if h_align:
-            loss = loss + sum(h_align) / len(h_align)
-            h_align.clear()
+        # L_total from model already includes L_pred, L_id, L_reg, L_switch, L_ctrl.
+        # Add KL on top (L_distill is 0 inside since we didn't pass distill_loss kwarg).
+        total_loss = kl + outputs.losses["L_total"]
 
-        # Round 2E exit gate entropy reg — accumulated by LoopedAttentionWrapper
-        e_exit = getattr(student, "e_exit_accum", [])
-        if e_exit:
-            loss = loss + sum(e_exit) / len(e_exit)
-            e_exit.clear()
-
-        if not torch.isfinite(loss):
+        if not torch.isfinite(total_loss):
             print(f"  [{name}] Step {step}: NaN/Inf loss — stopping variant.")
             break
 
-        # Accumulate gradients (scale by grad_accum so effective LR is consistent)
+        # --- Gradient accumulation ---
+        use_scaler = (amp_dtype == torch.float16)
         if use_scaler:
-            scaler.scale(loss / args.grad_accum).backward()
+            if not hasattr(train_variant, "_scaler"):
+                train_variant._scaler = torch.amp.GradScaler("cuda")
+            train_variant._scaler.scale(total_loss / args.grad_accum).backward()
         else:
-            (loss / args.grad_accum).backward()
+            (total_loss / args.grad_accum).backward()
         accum_steps += 1
 
         if accum_steps == args.grad_accum:
             if use_scaler:
-                scaler.unscale_(optimizer)
+                train_variant._scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
             if use_scaler:
-                scaler.step(optimizer)
-                scaler.update()
+                train_variant._scaler.step(optimizer)
+                train_variant._scaler.update()
             else:
                 optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             scheduler.step()
             accum_steps = 0
 
-        loss_val = loss.item()
+        loss_val = total_loss.item()
         ema_loss = loss_val if ema_loss is None else ema_alpha * ema_loss + (1 - ema_alpha) * loss_val
 
-        # Mid-run checkpoint
+        # --- Mid-run checkpoint ---
         if save_dir and args.checkpoint_every > 0 and step % args.checkpoint_every == 0:
             ckpt_path = os.path.join(save_dir, f"{name}_step{step}.pt")
-            save_checkpoint(ckpt_path, name, step, student, optimizer, scheduler,
-                            val_log, ema_loss, chunk_idx)
+            save_checkpoint(ckpt_path, name, step, model, le_state,
+                            optimizer, scheduler, val_log, ema_loss, chunk_idx)
 
-        # Validation eval
+        # --- Validation eval ---
         if step % args.eval_every == 0:
-            val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
+            val_loss = evaluate(model, teacher, val_chunks, device, args.temperature, amp_dtype)
             val_log[step] = val_loss
             lr_now = scheduler.get_last_lr()[0]
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
-                  f"train_ema={ema_loss:8.3f} | val={val_loss:8.3f} | lr={lr_now:.2e}")
-            summary = _alpha_summary(student, cfg)
-            if summary:
-                print(f"    [{name}] {summary}")
-            gate2a_stats = getattr(student, "gate2a_stats_accum", [])
-            if gate2a_stats:
-                mean_gt  = sum(s["g_time_mean"]    for s in gate2a_stats) / len(gate2a_stats)
-                mean_sil = sum(s["g_time_silence"] for s in gate2a_stats) / len(gate2a_stats)
-                print(f"    [{name}] g_time: mean={mean_gt:.3f}  silent={mean_sil*100:.1f}%")
-                gate2a_stats.clear()
-            h_stats = getattr(student, "h_stats_accum", [])
-            if h_stats:
-                mean_ent = sum(s["entropy"] for s in h_stats) / len(h_stats)
-                phase    = h_stats[-1]["phase"]
-                label    = "dense" if phase == 0 else "sparse"
-                print(f"    [{name}] H: entropy={mean_ent:.3f}  ({label})")
-                h_stats.clear()
-            # Round 2G: report mean overlap per Shared layer
-            g_stats = getattr(student, "g_stats_accum", [])
-            if g_stats:
-                from collections import defaultdict
-                by_layer = defaultdict(list)
-                for s in g_stats:
-                    by_layer[s["layer_idx"]].append(s["overlap"])
-                parts = [
-                    f"L{li}={sum(vs)/len(vs)*100:.1f}%"
-                    for li, vs in sorted(by_layer.items())
-                ]
-                print(f"    [{name}] G overlap (Full→Shared): {', '.join(parts)}")
-                g_stats.clear()
-            # Round 2E: report mean exit gate score and loops used per layer
-            e_stats = getattr(student, "e_stats_accum", [])
-            if e_stats:
-                from collections import defaultdict
-                by_layer = defaultdict(list)
-                for s in e_stats:
-                    by_layer[s["layer_idx"]].append(s["gate_mean"])
-                parts = [
-                    f"L{li}={sum(vs)/len(vs):.3f}"
-                    for li, vs in sorted(by_layer.items())
-                ]
-                print(f"    [{name}] E exit gate mean: {', '.join(parts)}")
-                e_stats.clear()
+                  f"train_ema={ema_loss:8.3f} | val={val_loss:8.3f} | lr={lr_now:.2e} | "
+                  f"vol_end={vol_end_count}")
+            if last_outputs is not None:
+                diag = _diag_summary(last_outputs)
+                if diag:
+                    print(f"    [{name}] {diag}")
 
         elif step % args.log_every == 0 or step == 1:
             lr_now = scheduler.get_last_lr()[0]
+            kl_val = kl.item()
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
-                  f"train_ema={ema_loss:8.3f} | lr={lr_now:.2e}")
+                  f"train_ema={ema_loss:8.3f} | kl={kl_val:.4f} | lr={lr_now:.2e}")
 
-    # Final checkpoint
-    if save_dir:
+    # --- Final checkpoint ---
+    if save_dir and le_state is not None:
         final_path = os.path.join(save_dir, f"{name}_final.pt")
-        save_checkpoint(final_path, name, args.steps, student, optimizer, scheduler,
-                        val_log, ema_loss, chunk_idx)
+        save_checkpoint(final_path, name, args.steps, model, le_state,
+                        optimizer, scheduler, val_log, ema_loss, chunk_idx)
 
-    # Final validation if not already done at last step
+    # --- Final validation ---
     if args.steps not in val_log:
-        val_loss = evaluate(student, teacher, val_chunks, device, args.temperature, amp_dtype)
+        val_loss = evaluate(model, teacher, val_chunks, device, args.temperature, amp_dtype)
         val_log[args.steps] = val_loss
         print(f"  [{name}] Step {args.steps:5d}/{args.steps} | val={val_loss:.4f}  (final)")
 
-    # Gate variants: report learned β, γ, α per Mamba layer
-    gate_mode = cfg.get("gate_mode")
-    if gate_mode in ("constant", "shared_beta"):
-        if gate_mode == "shared_beta":
-            shared_b = student.shared_beta.item()
-            print(f"\n  Shared β = {shared_b:+.4f}")
-        print(f"  Learned γ and α per Mamba layer:")
-        for plan in student.layer_plan:
-            if plan["kind"] == "mamba":
-                wrapper = student.adapter.get_attention(student.layers[plan["layer_idx"]])
-                bg = wrapper.mamba
-                g  = bg.gamma.item()
-                if gate_mode == "shared_beta":
-                    alpha = torch.sigmoid(student.shared_beta * bg.depth + bg.gamma).item()
-                    print(f"    layer {plan['layer_idx']:2d} depth={bg.depth:.2f}: "
-                          f"γ={g:+.3f}  →  α={alpha:.3f}")
-                else:
-                    alpha = torch.sigmoid(bg.gamma).item()
-                    print(f"    layer {plan['layer_idx']:2d}: γ={g:+.3f}  →  α={alpha:.3f}")
+    if vol_end_count > 0:
+        print(f"  [{name}] VOLUNTARY_END fired {vol_end_count} times total.")
 
-    del student, optimizer, scheduler
-    if scaler is not None:
-        del scaler
+    del model, optimizer, scheduler
+    if hasattr(train_variant, "_scaler"):
+        del train_variant._scaler
     torch.cuda.empty_cache()
 
     return val_log
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Argument parsing
 # ---------------------------------------------------------------------------
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Step 4: d_state gradient experiment")
-    p.add_argument("--teacher",     default="Qwen/Qwen2.5-7B")
-    p.add_argument("--student",     default="Qwen/Qwen2.5-1.5B")
+    p = argparse.ArgumentParser(description="Step 4 (LE v15): Life Equation variant experiment")
+    p.add_argument("--teacher",     default="Qwen/Qwen2.5-7B",
+                   help="Teacher model for KL distillation")
+    p.add_argument("--tokenizer",   default="Qwen/Qwen2.5-1.5B",
+                   help="Tokenizer to use (LE model vocab must match)")
     p.add_argument("--steps",       type=int,   default=5000)
     p.add_argument("--lr",          type=float, default=5e-5)
     p.add_argument("--seq-len",     type=int,   default=1024)
     p.add_argument("--temperature", type=float, default=2.0)
-    p.add_argument("--grad-accum",  type=int,   default=1,
-                   help="Gradient accumulation steps (effective batch = grad_accum × 1)")
-    p.add_argument("--eval-every",  type=int,   default=250,
-                   help="Evaluate on val set every N steps (clean signal)")
-    p.add_argument("--log-every",   type=int,   default=100,
-                   help="Log training EMA loss every N steps")
-    p.add_argument("--n-val",       type=int,   default=100,
-                   help="Number of held-out val chunks")
-    p.add_argument("--batch-size",  type=int,   default=4,
-                   help="Sequences per gradient step. Default 4 suits A100 80GB comfortably.")
-    p.add_argument("--variants",     default="D_constant,D_proper",
-                   help="Comma-separated variants to run, e.g. 'B,D_constant' or 'A,B,C,D_constant,D_proper'")
-    p.add_argument("--attn-indices", default=None,
-                   help="Comma-separated attention layer indices, e.g. '0,11,23' for 3-attention "
-                        "variant. Default: model-type preset ({0,9,18,27} for Qwen2.5-1.5B).")
-    p.add_argument("--save-dir",        default="checkpoints",
-                   help="Directory to save checkpoints. Final: <name>_final.pt. "
-                        "Set to '' to disable saving.")
-    p.add_argument("--resume",          default=None,
-                   help="Path to checkpoint to load before training. If step < --steps, "
-                        "resumes full state (crash recovery). If step >= --steps, loads "
-                        "model weights only (warm-start for Round 2).")
-    p.add_argument("--checkpoint-every", type=int, default=2500,
-                   help="Save mid-run checkpoint every N steps (0 = final only).")
-    p.add_argument("--lambda-pc",        type=float, default=0.01,
-                   help="P_soft prediction loss weight. 0.01 validated in B_psoft Run 2.")
+    p.add_argument("--warmup-steps", type=int,  default=200,
+                   help="LR warmup steps (also controls LE model warmup_steps config)")
+    p.add_argument("--grad-accum",  type=int,   default=4,
+                   help="Gradient accumulation steps")
+    p.add_argument("--eval-every",  type=int,   default=250)
+    p.add_argument("--log-every",   type=int,   default=100)
+    p.add_argument("--n-val",       type=int,   default=100)
+    p.add_argument("--batch-size",  type=int,   default=1,
+                   help="Sequences per forward (state is shared across batch). "
+                        "Use grad-accum for effective larger batches.")
+    p.add_argument("--variants",    default="C,C_no_auto",
+                   help="Comma-separated variant names to run")
+    p.add_argument("--save-dir",    default="checkpoints")
+    p.add_argument("--resume",      default=None,
+                   help="Checkpoint path to resume from")
+    p.add_argument("--checkpoint-every", type=int, default=2500)
     return p.parse_args()
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     args = parse_args()
@@ -941,124 +542,125 @@ def main():
 
     variant_names = [v.strip() for v in args.variants.split(",")]
     selected = {k: VARIANTS[k] for k in variant_names if k in VARIANTS}
-    unknown = [k for k in variant_names if k not in VARIANTS]
+    unknown  = [k for k in variant_names if k not in VARIANTS]
     if unknown:
         print(f"Unknown variants: {unknown}. Available: {list(VARIANTS.keys())}")
     if not selected:
         print("No valid variants selected.")
         return
 
-    # --- AMP dtype ---
     amp_dtype  = get_amp_dtype()
     dtype_name = "bfloat16" if amp_dtype == torch.bfloat16 else "float16"
-    print(f"AMP dtype: {dtype_name}  |  GradScaler: {'no (bfloat16)' if amp_dtype == torch.bfloat16 else 'yes'}")
+    print(f"AMP dtype: {dtype_name}")
 
-    n_train = args.steps * args.batch_size + 500   # enough chunks, never repeat within a variant
-
-    # Linear LR scaling: base --lr was tuned at batch_size=1
-    effective_lr = args.lr * args.batch_size
-    print(f"LR: {args.lr} × batch_size {args.batch_size} → effective LR {effective_lr:.2e}")
-    print(f"\nVariants: {list(selected.keys())}  |  Steps each: {args.steps}  |  "
+    n_train = args.steps * args.batch_size + 500
+    effective_lr = args.lr * max(args.batch_size, args.grad_accum)
+    print(f"Effective LR: {args.lr} × {max(args.batch_size, args.grad_accum)} "
+          f"→ {effective_lr:.2e}")
+    print(f"\nVariants: {list(selected.keys())}  |  Steps: {args.steps}  |  "
           f"Grad accum: {args.grad_accum}  |  Val every: {args.eval_every}")
 
-    # Load teacher once
+    # Load teacher once (stays in memory across all variants)
     print(f"\nLoading teacher: {args.teacher} ({dtype_name})...")
     teacher = AutoModelForCausalLM.from_pretrained(
-        args.teacher, dtype=amp_dtype
+        args.teacher, torch_dtype=amp_dtype
     ).to(device)
     teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
     print("Teacher loaded.")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.student)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Pre-tokenise once, shared across all variants
     train_chunks, val_chunks = load_data(tokenizer, args.seq_len, n_train, args.n_val)
 
-    # Run all selected variants
+    # Run selected variants sequentially
     all_val_logs = {}
     for name, cfg in selected.items():
         all_val_logs[name] = train_variant(
-            name, cfg, args, teacher, train_chunks, val_chunks, device, amp_dtype, effective_lr
+            name, cfg, args, teacher, train_chunks, val_chunks,
+            device, amp_dtype, effective_lr,
         )
 
-    # Comparison table (val loss)
-    print("\n" + "=" * 72)
-    print("EXPERIMENT RESULTS  (validation loss — lower is better)")
-    print("=" * 72)
+    # ---------------------------------------------------------------------------
+    # Comparison table
+    # ---------------------------------------------------------------------------
+    print("\n" + "=" * 80)
+    print("EXPERIMENT RESULTS  (validation KL loss — lower is better)")
+    print("=" * 80)
 
-    # Collect final val losses
     results = {}
     for name, val_log in all_val_logs.items():
         sorted_steps = sorted(val_log.keys())
-        mid_step  = sorted_steps[len(sorted_steps) // 2]
+        mid_step = sorted_steps[len(sorted_steps) // 2]
         results[name] = {
-            "label":      VARIANTS[name]["label"],
-            "val_start":  val_log.get(0,           float("nan")),
-            "val_mid":    val_log.get(mid_step,     float("nan")),
-            "val_final":  val_log[sorted_steps[-1]],
+            "label":     VARIANTS[name]["label"],
+            "val_start": val_log.get(0, float("nan")),
+            "val_mid":   val_log.get(mid_step, float("nan")),
+            "val_final": val_log[sorted_steps[-1]],
         }
 
-    baseline = results.get("A", {}).get("val_final", None)
+    baseline = results.get("C", results.get("A", {})).get("val_final", None)
+    baseline_name = "C" if "C" in results else "A"
 
-    print(f"{'Var':<4} {'d_state schedule':<32} {'Val@0':>8} {'Val@mid':>8} {'Val@end':>8} {'vs A':>8}")
-    print("-" * 72)
+    print(f"{'Var':<12} {'Configuration':<36} {'Val@0':>8} {'Val@mid':>8} "
+          f"{'Val@end':>8} {f'vs {baseline_name}':>8}")
+    print("-" * 80)
     for name, r in results.items():
-        if baseline and math.isfinite(r["val_final"]) and math.isfinite(baseline) and name != "A":
-            pct   = (r["val_final"] - baseline) / baseline * 100
-            vs_a  = f"{pct:+.1f}%"
-        elif name == "A":
-            vs_a = "(base)"
+        if baseline and math.isfinite(r["val_final"]) and math.isfinite(baseline) and name != baseline_name:
+            pct  = (r["val_final"] - baseline) / baseline * 100
+            vs_b = f"{pct:+.1f}%"
+        elif name == baseline_name:
+            vs_b = "(base)"
         else:
-            vs_a = "N/A"
-        label_s = r["label"][:30]
-        print(f"{name:<4} {label_s:<32} {r['val_start']:>8.2f} "
-              f"{r['val_mid']:>8.2f} {r['val_final']:>8.2f} {vs_a:>8}")
+            vs_b = "N/A"
+        label_s = r["label"][:34]
+        print(f"{name:<12} {label_s:<36} {r['val_start']:>8.3f} "
+              f"{r['val_mid']:>8.3f} {r['val_final']:>8.3f} {vs_b:>8}")
 
-    print("=" * 72)
+    print("=" * 80)
 
-    # Go/no-go: B vs D_constant answers whether exponential d_state beats uniform
-    if "D_constant" in results and "B" in results:
-        b_val  = results["B"]["val_final"]
-        dc_val = results["D_constant"]["val_final"]
-        if math.isfinite(b_val) and math.isfinite(dc_val):
-            improvement = (b_val - dc_val) / b_val * 100
-            print(f"\nD_constant vs B: {improvement:+.2f}%")
-            if improvement >= 10.0:
-                print("GO — Exponential d_state clearly outperforms uniform. Use for 9B Chimera.")
-            elif improvement > 2.0:
-                print("WEAK SIGNAL — D_constant better but under 10% threshold.")
-            elif improvement > 0:
-                print("MARGINAL — Within noise floor. d_state schedule has no clear effect.")
-            else:
-                print("NULL RESULT — d_state schedule has no effect at this configuration.")
-
-    # Go/no-go: D_proper vs D_constant answers whether depth-aware gating adds value
-    if "D_proper" in results and "D_constant" in results:
-        dc = results["D_constant"]["val_final"]
-        dp = results["D_proper"]["val_final"]
-        if math.isfinite(dc) and math.isfinite(dp):
-            improvement = (dc - dp) / dc * 100
-            print(f"\nD_proper improvement over D_constant: {improvement:+.2f}%")
-            if improvement > 0:
-                print("RESULT: Shared-β depth gate adds value — use depth-aware gating for 9B Chimera.")
-            else:
-                print("RESULT: Depth-awareness adds no value over per-layer constants.")
-                print("        Use sigmoid(γ_i) per layer; drop β entirely.")
-    elif "A" in results:
-        best = min(results, key=lambda k: results[k]["val_final"])
+    # Go/no-go: capacity question
+    if "A" in results and "C" in results:
         a = results["A"]["val_final"]
-        b = results[best]["val_final"]
-        if math.isfinite(a) and math.isfinite(b):
-            improvement = (a - b) / a * 100
-            print(f"\nBest variant: {best} — {improvement:.1f}% improvement over A")
-            if improvement >= 10.0:
-                print("GO — Use this d_state schedule for 9B Chimera.")
+        c = results["C"]["val_final"]
+        if math.isfinite(a) and math.isfinite(c):
+            imp = (a - c) / a * 100
+            print(f"\nCapacity (C vs A): {imp:+.2f}%")
+            if imp >= 10.0:
+                print("GO — d_state=64 clearly outperforms d_state=16. Use for 9B Chimera.")
+            elif imp > 2.0:
+                print("WEAK SIGNAL — d_state=64 better but under 10% threshold.")
             else:
-                print("NOTE — No variant reached ≥10% improvement threshold over A.")
+                print("NULL RESULT — d_state has no significant effect at this scale.")
+
+    # Go/no-go: autonomy question
+    if "C" in results and "C_no_auto" in results:
+        c      = results["C"]["val_final"]
+        c_no   = results["C_no_auto"]["val_final"]
+        if math.isfinite(c) and math.isfinite(c_no):
+            imp = (c_no - c) / c_no * 100
+            print(f"\nAutonomy (C vs C_no_auto): {imp:+.2f}%")
+            if imp > 2.0:
+                print("RESULT: Identity emancipation helps — keep gamma_0=1.0 for 9B Chimera.")
+            elif imp < -2.0:
+                print("RESULT: Emancipation hurts at this maturity scale — consider gamma_0=0.")
+            else:
+                print("RESULT: Autonomy is neutral at Ouroboros scale (expected — Z_mat too small).")
+
+    # Go/no-go: emancipation speed question
+    if "C" in results and "C_fast" in results:
+        c    = results["C"]["val_final"]
+        c_f  = results["C_fast"]["val_final"]
+        if math.isfinite(c) and math.isfinite(c_f):
+            imp = (c_f - c) / c * 100
+            print(f"\nEmancipation speed (C_fast vs C): {imp:+.2f}%")
+            if imp > 5.0:
+                print("RESULT: Fast emancipation destabilises training — use lambda_mature=0.1.")
+            else:
+                print("RESULT: Emancipation speed is not a critical hyperparameter at this scale.")
 
     print("\nStep 4 complete.")
 

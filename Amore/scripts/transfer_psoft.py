@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Transfer P_soft weights from a completed checkpoint into a new variant.
+"""Transfer compatible weights between LifeEquationModel checkpoints.
 
-Copies pred_proj, gamma, and sink_tokens — all d_state-independent weights.
-Mamba block internals (d_state-dependent shapes) are kept at their fresh
-conversion values. pred_proj starts warm, skipping the costly bootstrap phase.
+P_soft (predictive coding via L_pred) is baked into the LE model's forward pass
+and is no longer a separate module to transfer. This script handles the general
+case: transfer all weights whose keys AND shapes match between two LE checkpoints.
 
-Usage (on Colab after B_psoft finishes):
+Typical use-case: warm-start a new variant from a completed lower-d_state run.
+Weights that are d_state-independent (embed, output_head, all auxiliary modules)
+will transfer; MambaStep weights whose shapes depend on d_state will be skipped.
+
+Usage:
     python scripts/transfer_psoft.py \\
-        --source  checkpoints/B_psoft_final.pt \\
-        --output  checkpoints/D_bell2_32_psoft_init.pt \\
-        --variant D_bell2_32_psoft \\
-        --student Qwen/Qwen2.5-1.5B
+        --source  checkpoints/C_final.pt \\
+        --target-variant C_fast \\
+        --output  checkpoints/C_fast_warminit.pt
 
-Then run the new variant from the warm init:
+Then resume from that warm init:
     python scripts/run_experiment.py \\
-        --variants D_bell2_32_psoft --steps 15000 --batch-size 4 \\
-        --student Qwen/Qwen2.5-1.5B --teacher Qwen/Qwen2.5-7B \\
-        --attn-indices 0,9,18,27 \\
-        --resume checkpoints/D_bell2_32_psoft_init.pt
+        --variants C_fast --steps 10000 \\
+        --resume checkpoints/C_fast_warminit.pt
 """
 
 import argparse
@@ -25,66 +26,58 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "V2"))
 
 import torch
 from argparse import Namespace
 
-from scripts.run_experiment import build_variant_student, VARIANTS
+from life_eq_v2.config import LifeEquationConfig
+from life_eq_v2.model import LifeEquationModel
 
-
-# ---------------------------------------------------------------------------
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Transfer P_soft weights between variants")
-    p.add_argument("--source",       required=True,
-                   help="Path to completed source checkpoint (e.g. B_psoft_final.pt)")
-    p.add_argument("--output",       required=True,
-                   help="Path to write the warm-init checkpoint")
-    p.add_argument("--variant",      default="D_bell2_32_psoft",
-                   help="Target variant name (must be in VARIANTS dict)")
-    p.add_argument("--student",      default="Qwen/Qwen2.5-1.5B")
-    p.add_argument("--attn-indices", default=None,
-                   help="Comma-separated attn layer indices (default: model preset)")
+    p = argparse.ArgumentParser(description="Transfer compatible LE weights between checkpoints")
+    p.add_argument("--source",          required=True,
+                   help="Source checkpoint (.pt) — must contain 'model_state' key")
+    p.add_argument("--target-variant",  required=True,
+                   help="Target variant name from run_experiment.py VARIANTS dict")
+    p.add_argument("--output",          required=True,
+                   help="Output checkpoint path")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
-    if args.variant not in VARIANTS:
-        print(f"Unknown variant '{args.variant}'. Available: {list(VARIANTS.keys())}")
+    # --- Import VARIANTS from run_experiment ---
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from run_experiment import VARIANTS
+
+    if args.target_variant not in VARIANTS:
+        print(f"Unknown variant '{args.target_variant}'. Available: {list(VARIANTS.keys())}")
         sys.exit(1)
 
-    # ------------------------------------------------------------------
-    # 1. Load source state dict
-    # ------------------------------------------------------------------
-    print(f"Loading source checkpoint: {args.source}")
-    src_ckpt = torch.load(args.source, map_location="cpu", weights_only=False)
-    src_state = src_ckpt["model_state"]
-    src_step  = src_ckpt.get("step", "?")
-    src_var   = src_ckpt.get("variant", "?")
+    # --- Load source ---
+    print(f"Loading source: {args.source}")
+    src_ckpt   = torch.load(args.source, map_location="cpu", weights_only=False)
+    src_state  = src_ckpt["model_state"]
+    src_step   = src_ckpt.get("step", "?")
+    src_var    = src_ckpt.get("variant", "?")
     print(f"  Source variant: {src_var}  |  step: {src_step}")
 
-    # ------------------------------------------------------------------
-    # 2. Build target model architecture on the correct device
-    #    Must match the training device so key names are consistent
-    #    (CPU → FallbackMamba keys, CUDA → RealMambaBlock keys)
-    # ------------------------------------------------------------------
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\nBuilding target model: {args.variant} on {device} ...")
-    build_args = Namespace(student=args.student, attn_indices=args.attn_indices)
-    target = build_variant_student(build_args, VARIANTS[args.variant], device)
+    # --- Build target model ---
+    device = torch.device("cpu")
+    cfg    = VARIANTS[args.target_variant]["config_kwargs"]
+    config = LifeEquationConfig(**{**cfg, "device": "cpu"})
+    target = LifeEquationModel(config)
+    target.eval()
 
-    # ------------------------------------------------------------------
-    # 3. Selective weight transfer: copy any key whose name AND shape match
-    #    pred_proj and gamma are d_state-independent → will match
-    #    Mamba block internals are d_state-dependent → shapes differ, skipped
-    # ------------------------------------------------------------------
-    print("\nTransferring weights ...")
-    target_state   = target.state_dict()
-    transferred    = {}
-    skipped_shape  = []
-    skipped_absent = []
+    # --- Selective transfer ---
+    print(f"\nTransferring weights to variant '{args.target_variant}'...")
+    target_state    = target.state_dict()
+    transferred     = {}
+    skipped_shape   = []
+    skipped_absent  = []
 
     for key, val in src_state.items():
         if key not in target_state:
@@ -97,50 +90,35 @@ def main():
     target_state.update(transferred)
     target.load_state_dict(target_state)
 
-    # ------------------------------------------------------------------
-    # 4. Report
-    # ------------------------------------------------------------------
-    psoft_keys = [k for k in transferred
-                  if "pred_proj" in k or k.endswith(".gamma") or "sink" in k]
-    mamba_keys = [k for k in transferred
-                  if k not in psoft_keys]
+    # --- Report ---
+    print(f"  Transferred:    {len(transferred):4d} tensors")
+    print(f"  Shape mismatch: {len(skipped_shape):4d} tensors (d_state-dependent — expected)")
+    print(f"  Absent in src:  {len(skipped_absent):4d} tensors")
 
-    print(f"  Transferred total:       {len(transferred):4d} tensors")
-    print(f"    P_soft / gate / sinks: {len(psoft_keys):4d}  ← warm-started")
-    print(f"    Other (frozen base):   {len(mamba_keys):4d}")
-    print(f"  Skipped (shape differ):  {len(skipped_shape):4d}  ← kept fresh")
-    print(f"  Skipped (not in target): {len(skipped_absent):4d}")
+    # Group transferred keys by module prefix for readability
+    from collections import Counter
+    prefixes = Counter(k.split(".")[0] for k in transferred)
+    print("\n  Transferred by module:")
+    for mod, count in sorted(prefixes.items(), key=lambda x: -x[1]):
+        print(f"    {mod:<30}: {count}")
 
-    if psoft_keys:
-        print(f"\n  Sample transferred P_soft keys:")
-        for k in psoft_keys[:6]:
-            print(f"    {k}  {list(transferred[k].shape)}")
-        if len(psoft_keys) > 6:
-            print(f"    ... and {len(psoft_keys) - 6} more")
+    if skipped_shape:
+        print(f"\n  Skipped (shape mismatch) — first 5:")
+        for k in skipped_shape[:5]:
+            print(f"    {k}: src={src_state[k].shape}  target={VARIANTS[args.target_variant]}")
 
-    # ------------------------------------------------------------------
-    # 5. Save warm-init checkpoint
-    #    step=0 → load_checkpoint will warm-start (model weights only)
-    # ------------------------------------------------------------------
+    # --- Save output (as a warm-init checkpoint compatible with load_checkpoint) ---
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     torch.save({
-        "variant":         args.variant,
-        "step":            0,
-        "model_state":     {k: v.cpu() for k, v in target.state_dict().items()},
-        "optimizer_state": None,
-        "scheduler_state": None,
-        "val_log":         {},
-        "ema_loss":        None,
-        "chunk_idx":       0,
+        "variant":     args.target_variant,
+        "step":        src_ckpt.get("steps", 0),   # marks as completed → warm-start on resume
+        "model_state": target.state_dict(),
     }, args.output)
-
-    print(f"\nWarm-init checkpoint saved → {args.output}")
-    print(f"\nNext step:")
+    print(f"\nWarm-init checkpoint saved: {args.output}")
+    print(f"\nResume with:")
     print(f"  python scripts/run_experiment.py \\")
-    print(f"    --variants {args.variant} --steps 15000 --batch-size 4 \\")
-    print(f"    --student {args.student} --teacher Qwen/Qwen2.5-7B \\")
-    print(f"    --attn-indices 0,9,18,27 \\")
-    print(f"    --resume {args.output}")
+    print(f"      --variants {args.target_variant} --steps 10000 \\")
+    print(f"      --resume {args.output}")
 
 
 if __name__ == "__main__":

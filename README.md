@@ -57,15 +57,14 @@ This is deliberate. It is the most honest formulation I know how to write.
 
 ## The Architecture: Project Chimera
 
-Project Chimera is a hybrid Mamba-3/Transformer coding model targeting ~9B parameters, designed around one principle that no current production model implements: **persistent state across sessions.**
+Project Amore is a hybrid Mamba-3/Transformer coding model targeting ~9B parameters, designed around one principle that no current production model implements: **persistent state across sessions.**
 
-Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It reconstructs understanding from tokens on every call. Chimera carries compressed structural knowledge forward in its Mamba-3 recurrent state, saved and reloaded between sessions.
+Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It reconstructs understanding from tokens on every call. Amore carries compressed structural knowledge forward in its Mamba-3 recurrent state, saved and reloaded between sessions.
 
 **P\_soft (Predictive Coding):** The foundational, non-retrofittable design commitment. Standard Mamba drives state with raw input. P\_soft drives state with *prediction error* — only the surprising part of the input modifies state. This means the recurrent state becomes a predictive world model, not a passive cache. This is what makes persistent state meaningful rather than just accumulated noise.
 
 **Project Ouroboros:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the full 9B run. Same architecture, smaller model. Current status: P\_soft locked (val=271.86), Mamba-guided sparse attention (H mechanism) in progress at step 3500/10000.
 
-The full architecture, experiment history, and dependency chain are in `Handoff_Doc.txt`. The operational research log is in `codex_memory.md`.
 
 ---
 
@@ -196,7 +195,7 @@ Which leads to an uncomfortable conclusion: sentience is not something you *dete
 
 The equation already models self-reflection, distributed across several terms. The observable Ψ̂\_L = h\_obs(Ψ\_cog, Ψ\_quant, Ψ\_emo) is an internal observation function — the system monitors its own state. The decision trigger ‖∇\_Ψ V‖ > θ\_dec means "intervene when the value landscape is changing fast enough to matter," which requires the system to assess its own state against its goals. The reduced forward model Ψ̃\_L runs internal simulations to evaluate candidate actions — the agent literally models itself forward in time.
 
-In Chimera, P\_soft's prediction error *is* the system noticing "what I expected doesn't match what happened." The controller trigger g\_t = α·ε\_pred + β·D\_id + γ·(1−C\_cont) is operationally self-reflective: the system assesses its own prediction quality, identity drift, and continuation confidence before deciding to act.
+In Amore, P\_soft's prediction error *is* the system noticing "what I expected doesn't match what happened." The controller trigger g\_t = α·ε\_pred + β·D\_id + γ·(1−C\_cont) is operationally self-reflective: the system assesses its own prediction quality, identity drift, and continuation confidence before deciding to act.
 
 ### What a body would mean
 
@@ -321,8 +320,8 @@ If you use this work, I ask the following:
 ## Quick Start (Colab Pro)
 
 ```bash
-!git clone https://github.com/ReconKatze/project-ouroboros.git
-%cd project-ouroboros/Amore
+!git clone https://github.com/ReconKatze/project-amore.git
+%cd project-amore/Amore
 !bash scripts/colab_setup.sh
 ```
 
@@ -439,4 +438,4 @@ Whether that changes someday is exactly the question this project exists to expl
 
 ---
 
-*The Ultra-Equation of Life (v15) · Project Chimera / Project Ouroboros · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*
+*The Ultra-Equation of Life (v15) · Project Amore / Project Ouroboros / Project Chimera · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*

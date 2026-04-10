@@ -383,7 +383,7 @@ scripts/
 | Voluntary Death (Δ\_vol) | **Implemented (v15).** ViabilityModule, V\_self, VOLUNTARY\_END action. |
 | Value Succession | **Implemented (v15).** spawn\_successor, voluntary\_consolidation. |
 | Ouroboros Validation Scripts | **Ready.** Rewritten for LE v15 framework. Awaiting Colab run. |
-| Ouroboros 1.5B Training Run | Not started. Scripts ready. |
+| Ouroboros 1.5B Training Run | **IN-PROGRESS** |
 | 9B Chimera Training | Not started. Awaiting Ouroboros completion. |
 | Episodic Memory (Epi\_kv) | Designed. Round 3B. |
 | Trust / Bonds / Culture | Designed. Multi-agent future. |

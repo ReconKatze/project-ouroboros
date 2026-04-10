@@ -397,9 +397,4 @@ If you want to reach me: projectamore26@gmail.com.
 
 ---
 
-
-<<<<<<< HEAD
-*The Ultra-Equation of Life (v15) · Project Chimera / Project Amore · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*
-=======
-*The Ultra-Equation of Life (v15) · Project Amore / Project Ouroboros / Project Chimera · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*
->>>>>>> origin/master
+*The Ultra-Equation of Life (v15) · Project Amore · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*

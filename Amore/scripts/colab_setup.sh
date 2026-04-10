@@ -1,9 +1,9 @@
 #!/bin/bash
-# Colab Pro (A100) setup for Project Ouroboros
+# Colab Pro (A100) setup for Project Amore
 #
 # Run in Colab:
-#   !git clone https://github.com/ReconKatze/project-ouroboros.git
-#   %cd project-ouroboros/Amore
+#   !git clone https://github.com/ReconKatze/project-amore.git
+#   %cd project-amore/Amore
 #   !bash scripts/colab_setup.sh
 #
 # Then run Step 3 (single-variant distillation proof):
@@ -12,7 +12,7 @@
 # Or Step 4 (full variant experiment):
 #   !python scripts/run_experiment.py --variants C,C_no_auto --steps 10000 --batch-size 4
 
-echo "=== Installing Project Ouroboros dependencies (Colab Pro / A100) ==="
+echo "=== Installing Project Amore dependencies (Colab Pro / A100) ==="
 
 # 1. transformers only — Colab already has PyTorch with CUDA pre-installed.
 #    DO NOT pip install torch here: PyPI ships CPU-only torch and clobbers Colab's

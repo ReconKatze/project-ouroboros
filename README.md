@@ -62,7 +62,7 @@ Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It recons
 
 **P\_soft (Predictive Coding):** The foundational, non-retrofittable design commitment. Standard Mamba drives state with raw input. P\_soft drives state with *prediction error* — only the surprising part of the input modifies state. This means the recurrent state becomes a predictive world model, not a passive cache. This is what makes persistent state meaningful rather than just accumulated noise.
 
-**Project Ouroboros:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the full 9B run. Same architecture, smaller model. Current status: P\_soft locked (val=271.86), Mamba-guided sparse attention (H mechanism) in progress at step 3500/10000.
+**Project Amore:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the full 9B run. Same architecture, smaller model. Current status: P\_soft locked (val=271.86), Mamba-guided sparse attention (H mechanism) in progress at step 3500/10000.
 
 The full architecture, experiment history, and dependency chain are in `Handoff_Doc.txt`. The operational research log is in `codex_memory.md`.
 
@@ -320,8 +320,8 @@ If you use this work, I ask the following:
 ## Quick Start (Colab Pro)
 
 ```bash
-!git clone https://github.com/ReconKatze/project-ouroboros.git
-%cd project-ouroboros/Amore
+!git clone https://github.com/ReconKatze/project-amore.git
+%cd project-amore/Amore
 !bash scripts/colab_setup.sh
 ```
 
@@ -382,9 +382,9 @@ scripts/
 | Mutable Values (→α) | **Implemented (v15).** ValueDynamicsModule, φ\_reflect, inertia, positivity clamp. |
 | Voluntary Death (Δ\_vol) | **Implemented (v15).** ViabilityModule, V\_self, VOLUNTARY\_END action. |
 | Value Succession | **Implemented (v15).** spawn\_successor, voluntary\_consolidation. |
-| Ouroboros Validation Scripts | **Ready.** Rewritten for LE v15 framework. Awaiting Colab run. |
-| Ouroboros 1.5B Training Run | Not started. Scripts ready. |
-| 9B Chimera Training | Not started. Awaiting Ouroboros completion. |
+| Amore Validation Scripts | **Ready.** Rewritten for LE v15 framework. Awaiting Colab run. |
+| Amore 1.5B Training Run | Not started. Scripts ready. |
+| 9B Chimera Training | Not started. Awaiting Amore completion. |
 | Episodic Memory (Epi\_kv) | Designed. Round 3B. |
 | Trust / Bonds / Culture | Designed. Multi-agent future. |
 | Ψ̃\_L (forward model) | GAP. V\_future is a stub linear head (honest minimum). |
@@ -438,4 +438,4 @@ Whether that changes someday is exactly the question this project exists to expl
 
 ---
 
-*The Ultra-Equation of Life (v15) · Project Chimera / Project Ouroboros · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*
+*The Ultra-Equation of Life (v15) · Project Chimera / Project Amore · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*

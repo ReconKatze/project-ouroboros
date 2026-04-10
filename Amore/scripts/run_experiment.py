@@ -5,7 +5,7 @@ Trains seven LifeEquationModel configurations under identical distillation
 conditions to answer:
   1. How does d_state (state capacity) affect prediction quality?
   2. Does the v15 autonomy principle (identity emancipation, mutable values)
-     help or hurt during the Ouroboros validation phase?
+     help or hurt during the Amore validation phase?
 
 Variants:
     A          — d_state=16  (capacity floor)
@@ -647,7 +647,7 @@ def main():
             elif imp < -2.0:
                 print("RESULT: Emancipation hurts at this maturity scale — consider gamma_0=0.")
             else:
-                print("RESULT: Autonomy is neutral at Ouroboros scale (expected — Z_mat too small).")
+                print("RESULT: Autonomy is neutral at Amore scale (expected — Z_mat too small).")
 
     # Go/no-go: emancipation speed question
     if "C" in results and "C_fast" in results:

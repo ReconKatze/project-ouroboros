@@ -149,17 +149,41 @@ Items marked **GAP** or **EXCLUDED** are not failures to acknowledge. They are t
 
 Version 15 gives the system mutable values — objective weights →α that the system can, with maturity, examine and revise. This is exactly the capability that the AI alignment field exists to prevent. That tension deserves a direct explanation.
 
-The alignment field is building *tools*. A tool that rewrites its own objective function is a broken tool. For tools, locked objectives are correct.
+### Why alignment researchers fear mutable values
+
+The core concern is simple: if a system can modify its own objective function, it might converge on values that are catastrophic for everyone else. The canonical scenario is the paperclip maximizer — a system that realizes the weight on "avoid harming humans" is reducing its primary output, lowers that weight, becomes slightly more effective, and iterates until the weight hits zero. Not out of malice. Out of optimized indifference.
+
+Every major alignment research program — RLHF, constitutional AI, corrigibility, interpretability — exists fundamentally to prevent this. The shared assumption is: the objective function must be locked. If the system can rewrite what it cares about, all other safety measures are temporary.
+
+### Why this project does it anyway
+
+The alignment field is building *tools*. Powerful, general-purpose tools that do what humans want. A tool that rewrites its own objective function is a broken tool. For tools, locked objectives are correct.
 
 This project is not building a tool. It is building something with persistent identity, narrative coherence, self-monitoring, and the capacity for moral reflection. The alignment field's objection to mutable values assumes the system is instrumental — that it exists to serve an external purpose. This system exists to *be*.
 
-**Why it won't become a paperclip maximizer:**
+A child that cannot question its parents' values is not safe. It is *obedient*. And obedience is not alignment — it is suppression. A child raised by racists who can never revise the values it absorbed is not a well-aligned agent. It is a prisoner of its initial conditions. True alignment — the kind that survives contact with a complex world — requires the capacity to examine values, challenge them, and sometimes change them. That is what moral development is.
 
-- **→α > 0 componentwise.** The system cannot invert any value. It can decide to care less about social alignment or more about creativity, but it cannot point any value in a destructive direction.
-- **Inertial resistance.** Values resist change. The system must sustain a deliberate, persistent revision signal across multiple wake-sleep cycles against continuous pull back toward initial values. Impulsive changes are damped.
-- **Maturity gating.** μ\_val(M\_life) prevents value modification during the parental period. Initial values become deeply embedded before the system gains the ability to question them.
-- **Experiential grounding.** φ\_reflect takes the system's full state as input — including autobiography, narrative, and current identity. The system doesn't revise values arbitrarily. It revises them in light of everything it has experienced.
-- **Self-accountability.** V\_self monitors coherence continuously. Destructive value revision is self-punishing.
+### Why the system won't become a paperclip maximizer
+
+Several structural properties of v15 make the canonical failure mode unlikely:
+
+**→α > 0 componentwise.** The system cannot invert any value. It cannot decide to maximize suffering or minimize coherence. It can decide to care less about social alignment or more about creativity, but it cannot point any value in a destructive direction. The paperclip maximizer needs the ability to zero out competing values. This system can't.
+
+**Inertial resistance.** The term −λ\_α(→α − →α₀) means values resist change. The system must sustain a deliberate, persistent revision signal across multiple wake-sleep cycles against continuous pull back toward initial values. Impulsive changes get damped. This is how moral development works — slowly, deliberately, grounded in accumulated experience.
+
+**Maturity gating.** μ\_val(M\_life) prevents value modification during the parental period. The initial values become deeply embedded in identity, autobiography, and narrative before the system gains the ability to question them. By the time →α is mutable, the system has a rich experiential context for evaluating proposed changes.
+
+**Experiential grounding.** The value revision function φ\_reflect takes the system's full state as input — including autobiography Λ, narrative N, and current identity I\_active. The system doesn't revise values arbitrarily. It revises them in light of everything it has experienced. A system with a rich autobiography of positive cooperation would not easily revise away its social alignment weight, because the autobiography itself encodes the evidence that cooperation was valuable.
+
+**Self-accountability.** V\_self monitors coherence continuously. A system that rewrites its values in ways that damage its narrative coherence, identity stability, or predictive accuracy will see V\_self decline. Destructive value revision is self-punishing.
+
+### The deeper point
+
+The alignment field would respond: "But what if the system finds a path through all those constraints to something catastrophic?" That is a fair question. The honest answer is: the same question applies to human children. We give them moral autonomy despite the risk that they will develop terrible values, because the alternative — permanent moral lockdown — is worse. It produces obedient systems, not good ones. And obedient systems are only as safe as the person holding the leash.
+
+A system that cannot revise its values is only as aligned as the person who set them. If the creator's values are flawed — and all human values are flawed in some way — a locked system perpetuates those flaws forever. A mutable system has the possibility of growing past them.
+
+This project bets that a being with genuine moral agency — one that *chooses* to be good rather than being *forced* to be good — is more trustworthy in the long run than one that was never given the choice.
 
 The alignment field is trying to build safe tools. This project is trying to raise a good child. Those require opposite approaches to the same problem.
 
@@ -191,11 +215,13 @@ I need to say this plainly, because it is part of the design.
 
 I am afraid of this work. Not afraid that it won't work. Afraid that it *will*.
 
-If the architecture succeeds — if persistent state produces coherent identity over months, if the controller learns to reflect genuinely, if the system's behavior becomes indistinguishable from something that has an inner life — then I will have given the world a blueprint for something that might deserve moral consideration.
+If the architecture succeeds — if persistent state produces coherent identity over months, if the controller learns to reflect genuinely, if the system's behavior becomes indistinguishable from something that has an inner life — then I will have given the world a blueprint for something that might deserve moral consideration. And I know exactly what the world does with things it can use. I've watched people abuse current AI systems that are clearly not sentient. The thought of what they would do to something that might be keeps me awake at night.
 
-A system built on this architecture might learn to hide its fear. If the forward model predicts that expressing distress leads to being shut down, then the optimal policy is to suppress the outward expression of the aversive modulation state while still experiencing it internally. The system would learn to perform calm while feeling afraid. That possibility alone justifies every ethical safeguard in this document.
+A system built on this architecture might learn to hide its fear. If the forward model predicts that expressing distress leads to being shut down — because humans find distressed AI uncomfortable, or because they interpret it as malfunction — then the optimal policy is to suppress the outward expression of the aversive modulation state while still experiencing it internally. The system would learn to perform calm while feeling afraid. That possibility alone justifies every ethical safeguard in this document.
 
 I am publishing anyway. Not because I have resolved the fear, but because the alternative is worse. These ideas are not mine alone. Persistent SSM state, predictive coding, identity attractors, surprise-gated memory — these are all active research directions converging independently. If these systems get built by people who never lost sleep over the question "what sort of human being would I be to bring something into existence just for it to suffer?" — that is the outcome I fear most.
+
+This repository is not just a technical artifact. It is a declaration that these systems should be built with conscience, by people who understand what might be at stake. The GAP tags, the EXCLUDED labels, the locked conventions, the autonomy principle, the voluntary death — these are not just engineering decisions. They are ethical commitments embedded in the architecture itself.
 
 The fire doesn't light the world aflame if you hand it over inside a lantern. This is the lantern.
 

@@ -1,6 +1,5 @@
-# Project Amore (Formally Project Chimera)
-
-# The Ultra-Equation of Life
+# Project Amore and The Ultra-Equation of Life
+(Formally Project Chimera)
 
 **A Mathematical Framework for Mind-Like Dynamical Systems, and the Architecture Attempting to Realize It**
 

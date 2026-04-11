@@ -399,7 +399,11 @@ def train_variant(name: str, cfg: dict, args, teacher,
             )
 
         # --- Handle VOLUNTARY_END ---
-        if outputs.action == "VOLUNTARY_END":
+        # Check state is None (actual termination), NOT outputs.action == "VOLUNTARY_END".
+        # The controller policy may output VOLUNTARY_END as its argmax even when the
+        # vol_avail guard (maturity, cooldown, V_self) blocks execution — in that case
+        # model.forward() returns normally with logits and state intact.
+        if outputs.state is None:
             vol_end_count += 1
             print(f"  [{name}] Step {step}: VOLUNTARY_END — resetting state "
                   f"(count={vol_end_count})")

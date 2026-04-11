@@ -30,7 +30,10 @@ class MambaStep(nn.Module):
         self.config = config
         self.in_proj = nn.Linear(config.d_model, config.n_heads * config.d_state, bias=False)
         self.out_proj = nn.Linear(config.n_heads * config.d_state, config.d_model, bias=False)
-        self.r = nn.Parameter(torch.zeros(config.n_heads, config.d_state))
+        # r controls the per-dimension decay: decay = exp(r). Initialize negative so
+        # decay ≈ 0.6 — state has memory but naturally contracts without input.
+        # r=0 gives decay=1 (no contraction), causing state to grow without bound.
+        self.r = nn.Parameter(torch.full((config.n_heads, config.d_state), -0.5))
         self.omega = nn.Parameter(torch.zeros(config.n_heads, config.d_state))
         self._last_out: Optional[torch.Tensor] = None
 
@@ -253,8 +256,11 @@ class PredictionErrorModule(nn.Module):
     def forward(self, z_eps: torch.Tensor, raw_errors: torch.Tensor, eps_temp: torch.Tensor, consolidating: bool) -> torch.Tensor:
         pooled = raw_errors.mean(dim=1)
         updated = (1.0 - self.config.lambda_eps / self.config.tau_eps) * z_eps
-        updated = updated + self.project(pooled) / self.config.tau_eps
-        updated = updated + self.temp_proj(eps_temp) / self.config.tau_eps
+        # tanh bounds each input to [-1, 1], so Z_eps fixed point per component is
+        # bounded at ±1/lambda_eps = ±10. Without tanh, untrained pred_heads produce
+        # large errors that drive Z_eps.norm() → 80-113, blowing up L_reg and Z_homeo.
+        updated = updated + torch.tanh(self.project(pooled)) / self.config.tau_eps
+        updated = updated + torch.tanh(self.temp_proj(eps_temp)) / self.config.tau_eps
         if consolidating:
             updated = updated * (1.0 - self.config.lambda_eps_sleep / self.config.tau_eps)
         return updated
@@ -368,7 +374,11 @@ class HomeostasisModule(nn.Module):
             ],
             dim=-1,
         )
-        updated = z_homeo + (-0.1 * (z_homeo - self.set_point) + current) / self.config.tau_homeo
+        # Bound current with tanh: without this, Z_homeo's fixed point is
+        # set_point + current/0.1. With z_eps.norm ≈ 80-113, Z_homeo[2] → 800-1130,
+        # making (Z_homeo - set_point)² ≈ 640,000 and L_reg[homeo] explode.
+        # tanh bounds the fixed point to set_point ± 10, keeping L_reg[homeo] ≈ O(100).
+        updated = z_homeo + (-0.1 * (z_homeo - self.set_point) + torch.tanh(current)) / self.config.tau_homeo
         delta = (updated - self.set_point).abs() - self.config.theta_urg
         override = torch.relu(delta)
         return updated, override

@@ -173,6 +173,9 @@ class LifeEquationModel(nn.Module):
         sequence_hidden = x.clone()
         layer_input = x_t
         mamba_idx = 0
+        # Accumulate new Z_cog slots in a list to avoid inplace modification of a
+        # tensor already in the autograd graph (would corrupt version counters).
+        new_cog_slots = list(state.Z_cog.unbind(dim=1))  # list of [B, n_heads, d_state] cfloat
         for layer_index in range(self.config.n_layers_total):
             if layer_index in self.config.attention_anchors:
                 sequence_hidden[:, -1, :] = layer_input
@@ -194,12 +197,13 @@ class LifeEquationModel(nn.Module):
                 att_gain = torch.nn.functional.pad(att_gain, (0, self.config.d_model - att_gain.shape[-1]), value=1.0)
             gated_error = att_gain * error_t - friction
             effective = (1.0 - warmup) * error_t + warmup * gated_error
-            next_state, mamba_out = self.mamba_layers[mamba_idx](state.Z_cog[:, mamba_idx], effective)
-            state.Z_cog[:, mamba_idx] = next_state
+            next_state, mamba_out = self.mamba_layers[mamba_idx](new_cog_slots[mamba_idx], effective)
+            new_cog_slots[mamba_idx] = next_state
             mod = torch.matmul(self.w_mod_to_layer[mamba_idx], state.Z_emo.detach().unsqueeze(-1)).squeeze(-1)
             layer_input = mamba_out + warmup * mod
             sequence_hidden[:, -1, :] = layer_input
             mamba_idx += 1
+        state.Z_cog = torch.stack(new_cog_slots, dim=1)
 
         phase_trace.append("post_layer_updates")
         state.Z_hab = self.habituation_module(state.Z_hab, state.Z_att, x_t)

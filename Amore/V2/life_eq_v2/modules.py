@@ -84,7 +84,10 @@ class EmotionModule(nn.Module):
     def __init__(self, config: LifeEquationConfig):
         super().__init__()
         self.config = config
-        self.combine = nn.Linear(config.d_mod * 5, config.d_mod)
+        # early_pool + late_pool are [B, d_state] (Z_cog averaged over layers/heads)
+        # z_eps is [B, d_eps]; boredom and conflict are each expanded to [B, d_mod]
+        combine_in = config.d_state * 2 + config.d_eps + config.d_mod * 2
+        self.combine = nn.Linear(combine_in, config.d_mod)
         self.recur = nn.Linear(config.d_mod, config.d_mod)
         self.norm = nn.LayerNorm(config.d_mod)
 

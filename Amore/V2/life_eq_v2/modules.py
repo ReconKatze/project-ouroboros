@@ -223,14 +223,30 @@ class AttentionModule(nn.Module):
     def guided_sparse_attention(
         self,
         x: torch.Tensor,
-        mask: Optional[torch.Tensor],
+        step: int,
+        z_cap: torch.Tensor,
     ) -> torch.Tensor:
+        """Token-level sparse attention with budget gating.
+
+        The sparsity mask is computed fresh from token-level q/k scores, NOT from the
+        mamba-layer-space policy mask (which lives in [B, n_mamba_layers, n_mamba_layers]
+        space and cannot be applied here without a shape mismatch).
+        """
         q = self.q(x)
         k = self.k(x)
         v = self.v(x)
         attn_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(float(self.config.d_model))
         causal = torch.tril(torch.ones_like(attn_scores, dtype=torch.bool))
-        allowed = causal if mask is None else causal & mask
+        if step >= self.config.sparse_from:
+            budget = z_cap / (z_cap + 1e-6)
+            effective_k = max(1, int(x.shape[1] * self.config.attention_topk_frac * float(budget.mean().item())))
+            causal_scores = attn_scores.masked_fill(~causal, float("-inf"))
+            topk_idx = causal_scores.topk(k=effective_k, dim=-1).indices
+            tok_mask = torch.zeros_like(attn_scores, dtype=torch.bool)
+            tok_mask.scatter_(-1, topk_idx, True)
+            allowed = causal & tok_mask
+        else:
+            allowed = causal
         masked_scores = attn_scores.masked_fill(~allowed, float("-inf"))
         attn = torch.softmax(masked_scores, dim=-1)
         return self.out(torch.matmul(attn, v))

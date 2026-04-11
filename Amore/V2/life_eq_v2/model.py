@@ -183,9 +183,11 @@ class LifeEquationModel(nn.Module):
                     if layer_index == 0:
                         layer_input = self.attention_module.plain_attention(sequence_hidden)[:, -1, :]
                     else:
+                        # state.last_attention_mask is in mamba-layer space ([B, n_mamba_layers, n_mamba_layers])
+                        # and cannot be used as a token-space mask. guided_sparse_attention computes
+                        # its own topk mask from token-level q/k scores using z_cap as the budget.
                         layer_input = self.attention_module.guided_sparse_attention(
-                            sequence_hidden,
-                            state.last_attention_mask,
+                            sequence_hidden, step, state.Z_cap,
                         )[:, -1, :]
                 else:
                     layer_input = sequence_hidden[:, -1, :]

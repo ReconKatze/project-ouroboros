@@ -36,12 +36,14 @@ class MambaStep(nn.Module):
 
     def forward(self, state: torch.Tensor, effective_input: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch = effective_input.shape[0]
-        inp = self.in_proj(effective_input).view(batch, self.config.n_heads, self.config.d_state)
+        # torch.complex() requires Float/Double — cast from BF16 before complex math,
+        # then cast real part back to the input dtype for the output projection.
+        inp = self.in_proj(effective_input).float().view(batch, self.config.n_heads, self.config.d_state)
         decay = torch.exp(self.r).unsqueeze(0)
         rotation = torch.complex(torch.cos(self.omega), torch.sin(self.omega)).unsqueeze(0)
         projected = torch.complex(inp, torch.zeros_like(inp))
         next_state = decay * rotation * state + projected
-        out = self.out_proj(next_state.real.reshape(batch, -1))
+        out = self.out_proj(next_state.real.reshape(batch, -1).to(effective_input.dtype))
         self._last_out = out.detach()
         return next_state, out
 

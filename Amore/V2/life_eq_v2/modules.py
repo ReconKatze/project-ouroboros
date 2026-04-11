@@ -331,7 +331,9 @@ class FatigueModule(nn.Module):
         self.config = config
 
     def forward(self, z_pfat: torch.Tensor, seq_len_processed: int, z_att: torch.Tensor, consolidating: bool) -> torch.Tensor:
-        effort = seq_len_processed * z_att.abs().mean(dim=-1, keepdim=True)
+        # Clamp effort: Z_att grows during training, making effort = seq_len * Z_att.abs().mean()
+        # unbounded. Without clamping, Z_pfat² in L_reg grows to O(566,000) by step 600.
+        effort = (seq_len_processed * z_att.abs().mean(dim=-1, keepdim=True)).clamp(max=10.0)
         updated = z_pfat.clone()
         if not consolidating:
             updated = updated + self.config.lambda_exert * effort / self.config.tau_pfat
@@ -339,7 +341,7 @@ class FatigueModule(nn.Module):
             updated = updated * (1.0 - self.config.lambda_recov / self.config.tau_pfat)
         idle_factor = 1.0 - z_att.abs().mean(dim=-1, keepdim=True)
         updated = updated * (1.0 - self.config.lambda_recov_w * idle_factor / self.config.tau_pfat)
-        return updated.clamp_min(0.0)
+        return updated.clamp(min=0.0, max=10.0)  # bound Z_pfat so L_reg[pfat] ≤ alpha[3]*100
 
 
 class TemporalModule(nn.Module):

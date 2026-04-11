@@ -235,7 +235,9 @@ class LifeEquationModel(nn.Module):
         surprise = raw_errors_tensor.norm(dim=-1).mean(dim=-1, keepdim=True)
         self._episodic_write(state, x_t, surprise, state.Z_att.max(dim=-1, keepdim=True).values)
         # §31 v15 Phase D_autonomy: identity loss decays with maturity (basin loosens)
-        losses["L_id"] = self.identity_module.attractor_loss(state, gamma_eff)
+        # Apply lambda_identity scaling: v15 path (gamma_eff provided) omitted it,
+        # causing L_id to grow to O(68) vs kl O(0.3) and dominate gradients.
+        losses["L_id"] = self.config.lambda_identity * self.identity_module.attractor_loss(state, gamma_eff)
         # D_id for controller (also used by viability); computed after Z_id is updated
         d_id = self.identity_module.drift(state)
         # §26 v15: value reflection (gated by mu_val — values open after M_val_onset maturity)

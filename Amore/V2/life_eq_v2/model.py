@@ -296,7 +296,7 @@ class LifeEquationModel(nn.Module):
         # Allowing gradient flow here would let the optimizer exploit the negative
         # coherence/trust terms (-α[7]*coh, -α[8]*trust) by growing those weights to +∞.
         alpha = state.Z_values.detach()  # [B, d_alpha]; already clamped > 0
-        losses["L_reg"] = (
+        l_reg_raw = (
             alpha[:, 0].mean() * state.Z_eps.pow(2).mean()
             + alpha[:, 1].mean() * (self.config.z_cap_max - state.Z_cap).mean()
             + alpha[:, 2].mean() * boredom.pow(2).mean()
@@ -308,6 +308,9 @@ class LifeEquationModel(nn.Module):
             - alpha[:, 7].mean() * coherence.mean()
             - alpha[:, 8].mean() * state.T_trust.mean()
         )
+        # Scale L_reg so homeostatic terms (O(100-200)) don't drown the KL signal (O(0.3-1.1)).
+        losses["L_reg"] = self.config.lambda_reg * l_reg_raw
+        losses["L_reg_raw"] = l_reg_raw.detach()   # unscaled, for logging
         losses["L_total"] = losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"] + losses["L_reg"]
         diagnostics["boredom"] = boredom
         diagnostics["friction"] = friction

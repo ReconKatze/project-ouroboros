@@ -473,8 +473,13 @@ def train_variant(name: str, cfg: dict, args, teacher,
         elif step % args.log_every == 0 or step == 1:
             lr_now = scheduler.get_last_lr()[0]
             kl_val = kl.item()
+            l = outputs.losses
+            l_id   = l.get("L_id",      torch.tensor(0.0)).item()
+            l_pred = l.get("L_pred",    torch.tensor(0.0)).item() * model.config.lambda_pred
+            l_reg  = l.get("L_reg_raw", torch.tensor(0.0)).item()
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
-                  f"train_ema={ema_loss:8.3f} | kl={kl_val:.4f} | lr={lr_now:.2e}")
+                  f"train_ema={ema_loss:8.3f} | kl={kl_val:.4f} | "
+                  f"L_id={l_id:.1f} L_pred={l_pred:.2f} L_reg(raw)={l_reg:.1f} | lr={lr_now:.2e}")
 
     # --- Final checkpoint ---
     if save_dir and le_state is not None:

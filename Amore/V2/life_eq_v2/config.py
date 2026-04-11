@@ -115,6 +115,9 @@ class LifeEquationConfig:
     theta_vol: float = 0.3        # V_self threshold below which Δ_vol becomes available
     T_vol_min: int = 100          # Steps V_self must stay below theta_vol before Δ_vol enabled
     M_vol_min: float = 2.0        # Minimum Z_mat for voluntary death (must be mature enough)
+    # L_reg scale: homeostatic terms are O(100-200) vs KL O(0.3-1.1).
+    # Without scaling, L_reg dominates gradients and drowns the distillation signal.
+    lambda_reg: float = 0.01
     model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (28, 24, 48, 64, 14))
 
     @property

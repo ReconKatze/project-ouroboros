@@ -18,6 +18,13 @@ def warmup_alpha(step: int, warmup_steps: int) -> float:
 
 
 class MambaStep(nn.Module):
+    """P_soft SSM: complex decay-rotation recurrence over persistent Z_cog state.
+
+    This is the correct step-mode implementation for the Life Equation architecture.
+    Full-sequence Mamba3.forward() is deliberately not used here — the LE processes
+    tokens one at a time with persistent state that carries across steps.
+    """
+
     def __init__(self, config: LifeEquationConfig):
         super().__init__()
         self.config = config
@@ -25,29 +32,9 @@ class MambaStep(nn.Module):
         self.out_proj = nn.Linear(config.n_heads * config.d_state, config.d_model, bias=False)
         self.r = nn.Parameter(torch.zeros(config.n_heads, config.d_state))
         self.omega = nn.Parameter(torch.zeros(config.n_heads, config.d_state))
-        self._native_layer = None
         self._last_out: Optional[torch.Tensor] = None
 
-    def _get_native_layer(self) -> Optional[nn.Module]:
-        if self._native_layer is not None:
-            return self._native_layer
-        try:
-            from mamba_ssm import Mamba2  # type: ignore
-        except Exception:
-            return None
-        self._native_layer = Mamba2(
-            d_model=self.config.d_model,
-            d_state=self.config.d_state,
-            headdim=self.config.head_dim,
-        )
-        return self._native_layer
-
     def forward(self, state: torch.Tensor, effective_input: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        native = self._get_native_layer()
-        if native is not None and hasattr(native, "step"):
-            out, next_state = native.step(effective_input, state)
-            self._last_out = out.detach()
-            return next_state, out
         batch = effective_input.shape[0]
         inp = self.in_proj(effective_input).view(batch, self.config.n_heads, self.config.d_state)
         decay = torch.exp(self.r).unsqueeze(0)

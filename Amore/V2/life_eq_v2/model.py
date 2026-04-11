@@ -227,7 +227,9 @@ class LifeEquationModel(nn.Module):
         if consolidating:
             state.Z_sleep = (state.Z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
         else:
-            state.Z_sleep = (state.Z_sleep + 1.0 / self.config.tau_sleep).clamp_min(0.0)
+            # Clamp Z_sleep to [0, 10]: without an upper bound it grows to ~step/tau_sleep
+            # (≈156 at 10k steps), making L_reg[sleep] unbounded even with lambda_reg scaling.
+            state.Z_sleep = (state.Z_sleep + 1.0 / self.config.tau_sleep).clamp(min=0.0, max=10.0)
         state.Z_id = state.Z_cog[:, :, : self.config.n_id_heads, :].mean(dim=1)
         coherence = torch.cosine_similarity(
             state.Z_narr,

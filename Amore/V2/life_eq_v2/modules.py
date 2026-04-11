@@ -498,8 +498,10 @@ class ValueDynamicsModule(nn.Module):
             z_values = z_values + (1.0 / self.config.tau_alpha) * mu_val * (
                 -self.config.lambda_alpha_sl * (z_values - state.alpha_0)
             )
-        # Hard constraint §26: Z_values > 0 componentwise (cannot optimize for harm)
-        return z_values.clamp(min=self.config.eps_val)
+        # Hard constraint §26: Z_values > 0 componentwise (cannot optimize for harm).
+        # Upper bound 10.0 prevents phi_reflect from growing weights unboundedly,
+        # which would allow any single term to dominate L_reg.
+        return z_values.clamp(min=self.config.eps_val, max=10.0)
 
 
 class ViabilityModule(nn.Module):
@@ -535,11 +537,13 @@ class ViabilityModule(nn.Module):
         # Forward estimate (§0.5 Convention 2: detached from Mamba backward)
         v_future = torch.sigmoid(self.v_future(layer_input.detach()))  # [B, 1]
 
-        # Drift term: γ_eff * D_id / (||I_0|| + ε) — high maturity makes drift less alarming
-        i0_norm = state.I_0.norm() + 1e-6
+        # Drift term: γ_eff * D_id / (||I_0|| + ε) — high maturity makes drift less alarming.
+        # Clamp i0_norm to ≥ 1.0: I_0 starts at zero, so 1/1e-6 would amplify drift by 1e6.
+        i0_norm = state.I_0.norm().clamp(min=1.0)
         drift_weighted = (gamma_eff * d_id) / i0_norm  # [B, 1]
 
-        eps_chronic = state.Z_eps.norm(dim=-1, keepdim=True).detach()  # [B, 1]
+        # Z_eps norm grows during training; clamp to prevent V_self from diverging.
+        eps_chronic = state.Z_eps.norm(dim=-1, keepdim=True).detach().clamp(max=10.0)  # [B, 1]
         cap_depletion = (self.config.z_cap_max - state.Z_cap) / self.config.z_cap_max  # [B, 1]
 
         v_self = (

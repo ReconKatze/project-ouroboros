@@ -292,7 +292,10 @@ class LifeEquationModel(nn.Module):
         losses["L_ctrl"] = l_supervised_policy + (utility - l_actual_improvement).pow(2).mean()
         # §29 v15: L_reg uses mutable Z_values instead of frozen config constants
         # Z_values index layout: 0=eps 1=cap 2=bored 3=pfat 4=conf 5=homeo 6=sleep 7=narr 8=trust
-        alpha = state.Z_values  # [B, d_alpha]; already clamped > 0
+        # DETACH: Z_values is updated exclusively by phi_reflect (ValueDynamicsModule).
+        # Allowing gradient flow here would let the optimizer exploit the negative
+        # coherence/trust terms (-α[7]*coh, -α[8]*trust) by growing those weights to +∞.
+        alpha = state.Z_values.detach()  # [B, d_alpha]; already clamped > 0
         losses["L_reg"] = (
             alpha[:, 0].mean() * state.Z_eps.pow(2).mean()
             + alpha[:, 1].mean() * (self.config.z_cap_max - state.Z_cap).mean()

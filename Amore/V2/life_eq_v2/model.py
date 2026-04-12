@@ -223,7 +223,11 @@ class LifeEquationModel(nn.Module):
         base_learning_signal = distill_loss if distill_loss is not None else pred_loss.detach() * self.config.lambda_pred
         learn_signal = base_learning_signal.view(1, 1).expand(batch, self.config.d_learn)
         state.Z_learn = 0.9 * state.Z_learn + 0.1 * learn_signal
-        state.Z_mat = state.Z_mat + 1.0 / max(1, step + 1)
+        # Use per-lifetime age, not global training step. When VOLUNTARY_END resets
+        # le_state, Z_mat_age resets to 0 so the successor matures from scratch and
+        # μ_val / γ_eff follow the same schedule as the first life.
+        state.Z_mat = state.Z_mat + 1.0 / max(1, state.Z_mat_age + 1)
+        state.Z_mat_age += 1
         if consolidating:
             state.Z_sleep = (state.Z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
         else:

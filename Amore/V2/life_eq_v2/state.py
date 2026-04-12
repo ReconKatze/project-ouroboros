@@ -49,6 +49,7 @@ class FullState:
     last_attention_mask: Optional[torch.Tensor] = None
     steps_since_last_action: int = 0
     epi_index: int = 0
+    Z_mat_age: int = 0  # per-lifetime step counter for Z_mat; resets with state on VOLUNTARY_END
 
     def clone(self) -> "FullState":
         return FullState(
@@ -80,6 +81,7 @@ class FullState:
             last_attention_mask=None if self.last_attention_mask is None else self.last_attention_mask.clone(),
             steps_since_last_action=self.steps_since_last_action,
             epi_index=self.epi_index,
+            Z_mat_age=self.Z_mat_age,
         )
 
 

@@ -565,10 +565,19 @@ class ViabilityModule(nn.Module):
         # Forward estimate (§0.5 Convention 2: detached from Mamba backward)
         v_future = torch.sigmoid(self.v_future(layer_input.detach()))  # [B, 1]
 
-        # Drift term: γ_eff * D_id / (||I_0|| + ε) — high maturity makes drift less alarming.
-        # Clamp i0_norm to ≥ 1.0: I_0 starts at zero, so 1/1e-6 would amplify drift by 1e6.
-        i0_norm = state.I_0.norm().clamp(min=1.0)
-        drift_weighted = (gamma_eff * d_id) / i0_norm  # [B, 1]
+        # Angular drift: γ_eff * (1 - cos(Z_id, I_0)), bounded [0, 2], scale-invariant.
+        # Replaces the old γ_eff * D_id / ||I_0|| formulation which had two problems:
+        #   1. ||I_0|| clamped to 1.0 at reset (I_0=0) → drift ≈ |Z_id| → unbounded
+        #      as Mamba state magnitude grows during training (V_self → -61 for D)
+        #   2. Absolute L2 distance is not invariant to d_state choice
+        # Cosine-based drift is scale-invariant and naturally zero when I_0=0
+        # (no stable seed → no meaningful drift to measure yet).
+        i0_norm = state.I_0.norm()
+        has_seed = (i0_norm > 1e-3).float()  # 0.0 at fresh reset, 1.0 once I_0 is meaningful
+        z_id_flat = state.Z_id.real.flatten(1)  # [B, n_id_heads * d_state]
+        i0_flat   = state.I_0.real.flatten(1)   # [B, n_id_heads * d_state]
+        cos_sim = F.cosine_similarity(z_id_flat, i0_flat, dim=-1, eps=1e-6).unsqueeze(-1)
+        drift_weighted = has_seed * gamma_eff * (1.0 - cos_sim).clamp(min=0.0)  # [B, 1]
 
         # Z_eps norm grows during training; clamp to prevent V_self from diverging.
         eps_chronic = state.Z_eps.norm(dim=-1, keepdim=True).detach().clamp(max=10.0)  # [B, 1]

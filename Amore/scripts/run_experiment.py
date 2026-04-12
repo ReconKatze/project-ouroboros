@@ -197,6 +197,7 @@ def deserialize_state(d: dict, device: torch.device) -> FullState:
         for k, v in d.items()
     }
     kwargs.setdefault("manifest", [])
+    kwargs.setdefault("Z_mat_age", 0)  # backward compat: checkpoints saved before Act-3 fix
     return FullState(**kwargs)
 
 

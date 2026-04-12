@@ -356,7 +356,9 @@ def train_variant(name: str, cfg: dict, args, teacher,
     accum_steps = 0
     start_step = 0
     last_outputs: ForwardOutputs | None = None
-    vol_end_count = 0   # how many times VOLUNTARY_END fired this variant
+    vol_end_count = 0       # how many times VOLUNTARY_END fired this variant
+    best_val_loss = float("inf")
+    best_val_ckpt_path: str | None = None   # rolling best-val checkpoint for VOLUNTARY_END recovery
 
     # Resume from checkpoint if requested
     if args.resume:
@@ -407,6 +409,24 @@ def train_variant(name: str, cfg: dict, args, teacher,
             vol_end_count += 1
             print(f"  [{name}] Step {step}: VOLUNTARY_END — resetting state "
                   f"(count={vol_end_count})")
+            # Restore weights + optimizer from the best-val checkpoint so the
+            # successor is not born into the corrupted weight landscape that
+            # triggered VOLUNTARY_END.  The scheduler is NOT restored — we keep
+            # the current LR position so training continues from the right point
+            # on the cosine schedule.
+            if save_dir and best_val_ckpt_path and os.path.exists(best_val_ckpt_path):
+                recovery = torch.load(best_val_ckpt_path, map_location="cpu", weights_only=False)
+                model.load_state_dict(recovery["model_state"])
+                optimizer.load_state_dict(recovery["optimizer_state"])
+                # load_state_dict maps everything to CPU; move optimizer moments back to device
+                for param_state in optimizer.state.values():
+                    for k, v in param_state.items():
+                        if isinstance(v, torch.Tensor):
+                            param_state[k] = v.to(device)
+                print(f"  [{name}]   ↳ weights + optimizer restored from best-val "
+                      f"checkpoint (step {recovery['step']}, val={best_val_loss:.4f})")
+            else:
+                print(f"  [{name}]   ↳ no best-val checkpoint available — state reset only")
             le_state = model.init_state(batch_size=args.batch_size)
             continue   # no loss to backprop this step
 
@@ -461,6 +481,13 @@ def train_variant(name: str, cfg: dict, args, teacher,
         if step % args.eval_every == 0:
             val_loss = evaluate(model, teacher, val_chunks, device, args.temperature, amp_dtype)
             val_log[step] = val_loss
+            # Keep a rolling best-val checkpoint for VOLUNTARY_END weight recovery.
+            # Saved only when val strictly improves so disk writes are infrequent.
+            if save_dir and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_val_ckpt_path = os.path.join(save_dir, f"{name}_best_val.pt")
+                save_checkpoint(best_val_ckpt_path, name, step, model, le_state,
+                                optimizer, scheduler, val_log, ema_loss, chunk_idx)
             lr_now = scheduler.get_last_lr()[0]
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
                   f"train_ema={ema_loss:8.3f} | val={val_loss:8.3f} | lr={lr_now:.2e} | "

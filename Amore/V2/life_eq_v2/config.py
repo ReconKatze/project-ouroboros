@@ -106,7 +106,7 @@ class LifeEquationConfig:
     d_alpha: int = 14             # 9 L_reg weights + 5 V_self weights
     gamma_0: float = 1.0          # Initial identity attractor strength
     lambda_mature: float = 0.1    # Decay rate: gamma_eff = gamma_0 * exp(-lambda_mature * Z_mat)
-    M_val_onset: float = 5.0      # Z_mat threshold where mu_val starts opening
+    M_val_onset: float = 8.0      # Z_mat threshold where mu_val starts opening (~2000 lifetime steps)
     lambda_val: float = 1.0       # Sigmoid sharpness for mu_val
     tau_alpha: float = 100.0      # Value timescale (slowest deliberate layer)
     lambda_alpha: float = 0.01    # Inertial resistance: pulls Z_values back toward alpha_0

@@ -145,26 +145,38 @@ class StateStore:
             "timestamp": time.time(),
         }
 
-    def spawn_successor(self, final_archive: dict) -> FullState:
+    def spawn_successor(self, final_archive: dict, batch_size: int = 1) -> FullState:
         """§30 v15: Create successor from a system that chose voluntary consolidation.
 
         Successor inherits:
         - I_0 = parent's final Z_id (who parent BECAME, not original seed)
         - alpha_0 = parent's final Z_values (earned values, not creator's original)
-        - Z_mat = 0 (newborn; must earn its own emancipation from scratch)
+        - Z_mat = 0, Z_mat_age = 0 (newborn; must earn its own emancipation from scratch)
 
         The child's child inherits who the parent became, not who it was told to be.
+
+        batch_size: expand identity/values seeds to this batch dim (training may use B>1).
+        When archive batch dim != batch_size, the mean over archive batch is used as seed.
         """
         device = self.config.device
-        Z = zero_state(self.config, batch_size=1, n_agents=1)
-        earned_identity = final_archive["identity"].to(device)
-        earned_values = final_archive["values"].to(device)
-        Z.Z_id = earned_identity.clone()
-        Z.I_0 = earned_identity.clone()         # Successor's I_0 = who parent became
-        Z.Z_values = earned_values.clone()
-        Z.alpha_0 = earned_values.clone()        # Successor's alpha_0 = parent's earned values
-        Z.Z_cap = torch.full_like(Z.Z_cap, self.config.z_cap_max)
-        Z.Z_mat = torch.zeros_like(Z.Z_mat)      # Newborn
+        Z = zero_state(self.config, batch_size=batch_size, n_agents=1)
+
+        def _seed(t: torch.Tensor, target_b: int) -> torch.Tensor:
+            t = t.to(device)
+            if t.shape[0] == target_b:
+                return t.clone()
+            # Collapse to single representative (mean over source batch), then expand
+            return t.mean(dim=0, keepdim=True).expand(target_b, *t.shape[1:]).clone()
+
+        earned_identity = _seed(final_archive["identity"], batch_size)
+        earned_values   = _seed(final_archive["values"],   batch_size)
+
+        Z.Z_id    = earned_identity
+        Z.I_0     = earned_identity.clone()   # Successor's I_0 = who parent became
+        Z.Z_values = earned_values
+        Z.alpha_0  = earned_values.clone()    # Successor's alpha_0 = parent's earned values
+        Z.Z_cap    = torch.full_like(Z.Z_cap, self.config.z_cap_max)
+        Z.Z_mat    = torch.zeros_like(Z.Z_mat)   # Newborn
         return Z
 
     def compute_compatibility(self, current: FullState, candidate: FullState) -> torch.Tensor:

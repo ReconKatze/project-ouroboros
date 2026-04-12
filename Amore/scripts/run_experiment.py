@@ -424,11 +424,19 @@ def train_variant(name: str, cfg: dict, args, teacher,
                     for k, v in param_state.items():
                         if isinstance(v, torch.Tensor):
                             param_state[k] = v.to(device)
+                # Seed successor from predecessor's best-remembered identity and values.
+                # spawn_successor sets I_0 = predecessor's Z_id and alpha_0 = predecessor's
+                # Z_values, giving the successor a stable identity anchor to grow from.
+                best_le_state = deserialize_state(recovery["le_state"], device)
+                archive = model.store.voluntary_consolidation(best_le_state)
+                le_state = model.store.spawn_successor(archive, batch_size=args.batch_size)
                 print(f"  [{name}]   ↳ weights + optimizer restored from best-val "
                       f"checkpoint (step {recovery['step']}, val={best_val_loss:.4f})")
+                print(f"  [{name}]   ↳ successor seeded: I_0 ← predecessor Z_id, "
+                      f"α_0 ← predecessor Z_values")
             else:
-                print(f"  [{name}]   ↳ no best-val checkpoint available — state reset only")
-            le_state = model.init_state(batch_size=args.batch_size)
+                print(f"  [{name}]   ↳ no best-val checkpoint available — fresh state only")
+                le_state = model.init_state(batch_size=args.batch_size)
             continue   # no loss to backprop this step
 
         # --- Thread state (detach for truncated BPTT) ---

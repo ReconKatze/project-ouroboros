@@ -43,7 +43,7 @@ class FullState:
     epi_keys: torch.Tensor
     epi_vals: torch.Tensor
     manifest: List[ManifestEntry]
-    I_0: torch.Tensor          # [B, n_id_heads, d_state] — frozen identity seed (never modified)
+    I_0: torch.Tensor          # [B, n_id_heads, d_model] — frozen identity seed (never modified)
     Z_values: torch.Tensor     # [B, d_alpha] — mutable objective weights (v15 §26)
     alpha_0: torch.Tensor      # [B, d_alpha] — frozen creator reference for Z_values (never modified)
     last_attention_mask: Optional[torch.Tensor] = None
@@ -95,10 +95,18 @@ def zero_state(
     n_agents: int = 1,
     alpha_0_seed: Optional[torch.Tensor] = None,
 ) -> FullState:
-    head_shape = (batch_size, config.n_mamba_layers, config.n_heads, config.d_state)
-    z_cog = torch.zeros(head_shape, dtype=torch.cfloat, device=config.device)
-    i0 = torch.zeros((batch_size, config.n_id_heads, config.d_state), dtype=torch.cfloat, device=config.device)
-    z_cog[:, :, : config.n_id_heads, :] = i0.unsqueeze(1)
+    # Z_cog: real [B, n_mamba_layers, d_model] — last-token hidden output of each Mamba-3 layer.
+    # Changed from cfloat[B, n_mamba, n_heads, d_state] (custom complex recurrence) to real layer
+    # outputs so that pool_complex_state, EmotionModule, etc. can use them without SSM-internal
+    # state shape uncertainty.  The Mamba-3 SSM state is managed inside each Mamba3Block call.
+    z_cog = torch.zeros(
+        (batch_size, config.n_mamba_layers, config.d_model), device=config.device
+    )
+    # Z_id: real [B, n_id_heads, d_model] — first n_id_heads layers' outputs, used as identity proxy.
+    # I_0 has the same shape; both are real because Z_cog is real.
+    i0 = torch.zeros(
+        (batch_size, config.n_id_heads, config.d_model), device=config.device
+    )
 
     # §26 v15: Z_values starts equal to α_0 (creator's values, frozen reference)
     if alpha_0_seed is None:
@@ -137,4 +145,16 @@ def zero_state(
 
 
 def pool_complex_state(z_cog: torch.Tensor) -> torch.Tensor:
-    return torch.view_as_real(z_cog).mean(dim=(1, 2, 3))
+    """Pool Z_cog [B, n_mamba, d_model] → [B, 2].
+
+    Returns the mean of the first and second halves of d_model, averaged over
+    all Mamba layers.  Preserves the [B, 2] contract that ControllerModule
+    (cont_head, value) and ValueDynamicsModule (reflect_in=2) require.
+    Replaces the old complex view_as_real approach now that Z_cog is real.
+    """
+    flat = z_cog.mean(dim=1)                          # [B, d_model]
+    half = flat.shape[-1] // 2
+    return torch.stack(
+        [flat[:, :half].mean(dim=-1), flat[:, half:].mean(dim=-1)],
+        dim=-1,
+    )  # [B, 2]

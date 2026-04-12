@@ -360,6 +360,7 @@ def train_variant(name: str, cfg: dict, args, teacher,
     vol_end_count = 0       # how many times VOLUNTARY_END fired this variant
     best_val_loss = float("inf")
     best_val_ckpt_path: str | None = None   # rolling best-val checkpoint for VOLUNTARY_END recovery
+    prev_layer_input = None   # §27 Ψ̃_L: threaded across steps for transition model training
 
     # Resume from checkpoint if requested
     if args.resume:
@@ -399,6 +400,7 @@ def train_variant(name: str, cfg: dict, args, teacher,
                 state=le_state,
                 step=step,
                 consolidating=False,
+                prev_layer_input=prev_layer_input,
             )
 
         # --- Handle VOLUNTARY_END ---
@@ -437,11 +439,14 @@ def train_variant(name: str, cfg: dict, args, teacher,
             else:
                 print(f"  [{name}]   ↳ no best-val checkpoint available — fresh state only")
                 le_state = model.init_state(batch_size=args.batch_size)
+            prev_layer_input = None   # new lifetime — no valid previous hidden state
             continue   # no loss to backprop this step
 
         # --- Thread state (detach for truncated BPTT) ---
         le_state = detach_state(outputs.state)
         last_outputs = outputs
+        # §27 Ψ̃_L: thread layer_input to next step so transition model can train
+        prev_layer_input = outputs.diagnostics.get("layer_input")
 
         # --- Compute loss ---
         kl = kl_distill_loss(outputs.logits.float(), teacher_last, T=args.temperature)
@@ -510,12 +515,13 @@ def train_variant(name: str, cfg: dict, args, teacher,
             lr_now = scheduler.get_last_lr()[0]
             kl_val = kl.item()
             l = outputs.losses
-            l_id   = l.get("L_id",      torch.tensor(0.0)).item()
-            l_pred = l.get("L_pred",    torch.tensor(0.0)).item() * model.config.lambda_pred
-            l_reg  = l.get("L_reg_raw", torch.tensor(0.0)).item()
+            l_id     = l.get("L_id",         torch.tensor(0.0)).item()
+            l_pred   = l.get("L_pred",       torch.tensor(0.0)).item() * model.config.lambda_pred
+            l_reg    = l.get("L_reg_raw",    torch.tensor(0.0)).item()
+            l_trans  = l.get("L_transition", torch.tensor(0.0)).item()
             print(f"  [{name}] Step {step:5d}/{args.steps} | "
                   f"train_ema={ema_loss:8.3f} | kl={kl_val:.4f} | "
-                  f"L_id={l_id:.1f} L_pred={l_pred:.2f} L_reg(raw)={l_reg:.1f} | lr={lr_now:.2e}")
+                  f"L_id={l_id:.1f} L_pred={l_pred:.2f} L_reg(raw)={l_reg:.1f} L_trans={l_trans:.4f} | lr={lr_now:.2e}")
 
     # --- Final checkpoint ---
     if save_dir and le_state is not None:

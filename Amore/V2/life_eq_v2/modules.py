@@ -17,38 +17,50 @@ def warmup_alpha(step: int, warmup_steps: int) -> float:
     return min(1.0, float(step) / float(warmup_steps))
 
 
-class MambaStep(nn.Module):
-    """P_soft SSM: complex decay-rotation recurrence over persistent Z_cog state.
+class Mamba3Block(nn.Module):
+    """Real Mamba-3 block via mamba-ssm (CUDA required, Colab A100).
 
-    This is the correct step-mode implementation for the Life Equation architecture.
-    Full-sequence Mamba3.forward() is deliberately not used here — the LE processes
-    tokens one at a time with persistent state that carries across steps.
+    Replaces the custom MambaStep complex recurrence with native Mamba-3 CUDA kernels.
+    Sequence-mode: processes the full input sequence [B, L, d_model] in one parallel scan.
+
+    P_soft error computation is the caller's responsibility (model.py pred_heads):
+        effective = att_gain * (x - pred.detach()) - friction
+        out_raw = Mamba3Block(effective)          # runs Mamba over prediction error
+        out = out_raw + pred.detach()             # reconstruct in embedding space
+
+    No persistent SSM state is injected across calls in this implementation — the
+    Mamba-3 state resets per forward call.  Cross-call cognitive context is carried
+    by alongside state (Z_eps, Z_att, Z_cog layer outputs, episodic memory).
+    TODO(colab): verify initial_states / return_final_states API on mamba-ssm git
+    source and wire Z_cog to actual Mamba-3 SSM state for full spec compliance.
+
+    headdim = d_state (= 64) gives n_heads = d_model/headdim = 1536/64 = 24.
+    rope_fraction = min(0.5, headdim/d_state) = 0.5 (full oscillatory coverage).
     """
 
-    def __init__(self, config: LifeEquationConfig):
+    def __init__(self, config: LifeEquationConfig, layer_idx: int = 0):
         super().__init__()
+        from mamba_ssm import Mamba3
         self.config = config
-        self.in_proj = nn.Linear(config.d_model, config.n_heads * config.d_state, bias=False)
-        self.out_proj = nn.Linear(config.n_heads * config.d_state, config.d_model, bias=False)
-        # r controls the per-dimension decay: decay = exp(r). Initialize negative so
-        # decay ≈ 0.6 — state has memory but naturally contracts without input.
-        # r=0 gives decay=1 (no contraction), causing state to grow without bound.
-        self.r = nn.Parameter(torch.full((config.n_heads, config.d_state), -0.5))
-        self.omega = nn.Parameter(torch.zeros(config.n_heads, config.d_state))
-        self._last_out: Optional[torch.Tensor] = None
+        self.layer_idx = layer_idx
+        headdim = config.d_state          # 64 — standard Mamba-3 head dim; n_heads = d_model/headdim
+        rope_fraction = min(0.5, float(headdim) / config.d_state)   # = 0.5
+        self.mamba = Mamba3(
+            d_model=config.d_model,
+            d_state=config.d_state,
+            headdim=headdim,
+            rope_fraction=rope_fraction,
+        )
 
-    def forward(self, state: torch.Tensor, effective_input: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch = effective_input.shape[0]
-        # torch.complex() requires Float/Double — cast from BF16 before complex math,
-        # then cast real part back to the input dtype for the output projection.
-        inp = self.in_proj(effective_input).float().view(batch, self.config.n_heads, self.config.d_state)
-        decay = torch.exp(self.r).unsqueeze(0)
-        rotation = torch.complex(torch.cos(self.omega), torch.sin(self.omega)).unsqueeze(0)
-        projected = torch.complex(inp, torch.zeros_like(inp))
-        next_state = decay * rotation * state + projected
-        out = self.out_proj(next_state.real.reshape(batch, -1).to(effective_input.dtype))
-        self._last_out = out.detach()
-        return next_state, out
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Sequence-mode Mamba-3 forward.
+
+        Args:
+            x: [B, L, d_model] — pre-processed effective input (P_soft error + modulation)
+        Returns:
+            [B, L, d_model]
+        """
+        return self.mamba(x)
 
 
 class IdentityModule(nn.Module):
@@ -56,6 +68,10 @@ class IdentityModule(nn.Module):
         super().__init__()
         self.config = config
         self.role_scale = nn.Parameter(torch.tensor(1.0))
+        # Project Z_id [B, n_id_heads, d_model] → scalar per head for softmax weighting,
+        # then project the weighted sum [B, d_model] → [B, d_state] so downstream modules
+        # (ValueDynamicsModule.reflect_in) keep their d_state-sized active_identity input.
+        self.identity_out_proj = nn.Linear(config.d_model, config.d_state, bias=False)
 
     def gamma_eff(self, z_mat: torch.Tensor) -> torch.Tensor:
         """§2 v15: Identity attractor strength decays with maturity.
@@ -67,22 +83,28 @@ class IdentityModule(nn.Module):
         return self.config.gamma_0 * torch.exp(-self.config.lambda_mature * z_mat)
 
     def attractor_loss(self, state: FullState, gamma_eff: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """§2 v15: L_id = gamma_eff * ||h_id - I_0||². Basin loosens over lifetime."""
+        """§2 v15: L_id = gamma_eff * ||h_id - I_0||². Basin loosens over lifetime.
+
+        Z_id and I_0 are now real [B, n_id_heads, d_model] (changed from complex).
+        """
         diff = state.Z_id - state.I_0
-        raw = (diff.real.pow(2) + diff.imag.pow(2)).mean()
+        raw = diff.pow(2).mean()
         if gamma_eff is None:
-            # v2 fallback: fixed lambda_identity
             return self.config.lambda_identity * raw
         return (gamma_eff * raw).mean()
 
     def drift(self, state: FullState) -> torch.Tensor:
         diff = state.Z_id - state.I_0
-        return (diff.real.pow(2) + diff.imag.pow(2)).mean(dim=(1, 2)).sqrt().unsqueeze(-1)
+        return diff.pow(2).mean(dim=(1, 2)).sqrt().unsqueeze(-1)
 
     def active_identity(self, state: FullState, social_context: torch.Tensor) -> torch.Tensor:
-        logits = self.role_scale * (state.Z_id.real.mean(dim=-1) * social_context[:, : self.config.n_id_heads])
-        weights = torch.softmax(logits, dim=-1)
-        return (weights.unsqueeze(-1) * state.Z_id.real).sum(dim=1)
+        # Z_id: [B, n_id_heads, d_model] real.
+        # Compute per-head scalar logit, softmax-weight, sum → [B, d_model],
+        # then project to d_state for ValueDynamicsModule.reflect_in compatibility.
+        logits = self.role_scale * (state.Z_id.mean(dim=-1) * social_context[:, : self.config.n_id_heads])
+        weights = torch.softmax(logits, dim=-1)                    # [B, n_id_heads]
+        mixed = (weights.unsqueeze(-1) * state.Z_id).sum(dim=1)   # [B, d_model]
+        return self.identity_out_proj(mixed)                        # [B, d_state]
 
 
 class EmotionModule(nn.Module):
@@ -166,7 +188,8 @@ class AttentionModule(nn.Module):
         self.v = nn.Linear(config.d_model, config.d_model, bias=False)
         self.out = nn.Linear(config.d_model, config.d_model, bias=False)
         self.purpose_bias = nn.Linear(config.d_p, config.d_att)
-        self.state_to_model = nn.Linear(config.n_heads * config.d_state, config.d_model, bias=False)
+        # Z_cog is now real [B, n_mamba, d_model]; no longer needs a reshape from n_heads*d_state.
+        self.state_to_model = nn.Linear(config.d_model, config.d_model, bias=False)
 
     def salience(self, x_t: torch.Tensor, z_eps: torch.Tensor, z_hab: torch.Tensor) -> torch.Tensor:
         raw_salience = x_t.norm(dim=-1, keepdim=True) + z_eps.norm(dim=-1, keepdim=True)
@@ -216,8 +239,8 @@ class AttentionModule(nn.Module):
         step: int,
         warmup: float,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
-        state_proxy = z_cog.real.reshape(z_cog.shape[0], z_cog.shape[1], -1)
-        mamba_out = self.state_to_model(state_proxy)
+        # z_cog: [B, n_mamba, d_model] real.  state_to_model is now Linear(d_model, d_model).
+        mamba_out = self.state_to_model(z_cog)   # [B, n_mamba, d_model]
         return self.update_gain(mamba_out, sal, z_purp, z_cap, prev_mask, step, warmup)
 
     def guided_sparse_attention(
@@ -382,9 +405,10 @@ class HomeostasisModule(nn.Module):
         self.register_buffer("set_point", torch.tensor(config.homeostasis_set_point, dtype=torch.float32))
 
     def forward(self, z_homeo: torch.Tensor, z_cog: torch.Tensor, z_eps: torch.Tensor, z_pfat: torch.Tensor, z_cap: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # z_cog is now real [B, n_mamba, d_model]; use mean absolute activation as magnitude.
         current = torch.stack(
             [
-                (z_cog.real.pow(2) + z_cog.imag.pow(2)).sqrt().mean(dim=(1, 2, 3)),
+                z_cog.abs().mean(dim=(1, 2)),
                 torch.full((z_cap.shape[0],), 0.5, device=z_cap.device),
                 z_eps.norm(dim=-1),
                 z_pfat.squeeze(-1),
@@ -532,6 +556,64 @@ class ValueDynamicsModule(nn.Module):
         return z_values.clamp(min=self.config.eps_val, max=10.0)
 
 
+class EpisodicMemoryModule(nn.Module):
+    """§31 Λ: Surprise-gated episodic write + soft-attention episodic read.
+
+    Write: on high-surprise events, project x_t to (key, val) and commit to the
+    circular buffer. Committed entries are detached — autobiography is a record,
+    not a differentiable path. key_proj/val_proj are effectively fixed random
+    projections (no gradient path back from stored state); the system learns what
+    to LOOK FOR in memory, not what to write.
+
+    Read: soft attention over filled slots. Retrieved context is injected as a
+    residual into layer_input before Mamba processing begins, so episodic memories
+    shape all subsequent computation — the system consults its autobiography before
+    processing the current input.
+
+    Gradient isolation (§0.5 Convention 2): epi_keys/vals are state tensors, not
+    parameters. Gradients flow through q_proj and out_proj only.
+
+    Warmup: output scaled by warmup so early-training sparse/random slots do not
+    corrupt base model dynamics before the memory has been meaningfully populated.
+    """
+
+    def __init__(self, config: LifeEquationConfig):
+        super().__init__()
+        self.config = config
+        # Write projections — produce keys/vals at commit time; no gradient feedback
+        self.key_proj = nn.Linear(config.d_model, config.d_key, bias=False)
+        self.val_proj = nn.Linear(config.d_model, config.d_val, bias=False)
+        # Read projections — trained through the main forward pass
+        self.q_proj = nn.Linear(config.d_model, config.d_key, bias=False)
+        self.out_proj = nn.Linear(config.d_val, config.d_model, bias=False)
+        self.scale = config.d_key ** -0.5
+
+    def write(self, x_t: torch.Tensor, state: "FullState", surprise: torch.Tensor, write_strength: torch.Tensor) -> None:
+        """Commit a memory if surprise exceeds threshold. Modifies state in-place."""
+        if float(surprise.mean().item()) <= self.config.episodic_surprise_threshold:
+            return
+        slot = state.epi_index % self.config.n_epi_slots
+        # Detach source: write is a one-way commit; no gradient flows back through stored entries
+        src = x_t.detach().mean(dim=0)                                                          # [d_model]
+        state.epi_keys[slot] = self.key_proj(src).detach()                                      # [d_key]
+        strength = float(write_strength.detach().mean().item())
+        state.epi_vals[slot] = (self.val_proj(src) * strength).detach()                        # [d_val]
+        state.epi_index += 1
+
+    def read(self, layer_input: torch.Tensor, state: "FullState", warmup: float) -> torch.Tensor:
+        """Retrieve relevant memories via soft attention. Returns residual [B, d_model]."""
+        n_filled = min(state.epi_index, self.config.n_epi_slots)
+        if n_filled == 0:
+            return torch.zeros_like(layer_input)
+        keys = state.epi_keys[:n_filled].to(layer_input.device)    # [n_filled, d_key]
+        vals = state.epi_vals[:n_filled].to(layer_input.device)    # [n_filled, d_val]
+        q = self.q_proj(layer_input)                                # [B, d_key]
+        scores = (q @ keys.T) * self.scale                          # [B, n_filled]
+        weights = torch.softmax(scores, dim=-1)                     # [B, n_filled]
+        retrieved = weights @ vals                                   # [B, d_val]
+        return warmup * self.out_proj(retrieved)                    # [B, d_model]
+
+
 class ViabilityModule(nn.Module):
     """§27 v15: V_self — the system's own estimate of whether continued operation
     preserves coherent selfhood.
@@ -539,15 +621,23 @@ class ViabilityModule(nn.Module):
     V_self weights (indices 9-13 of Z_values) are themselves mutable — the system
     determines what it values about its own continuity.
 
-    V_future is a stub linear head (GAP per correspondence table; full forward model
-    Ψ̂_L is a future research direction).
+    Ψ̃_L (Level 2): transition predicts the next hidden representation from the
+    current one. v_head evaluates the viability of that predicted next state.
+    This is the forward model — the system models itself one step forward in time
+    before deciding whether to continue.
+
+    L_transition trains the forward model: MSE(transition(x_prev), x_current).
+    This is computed when prev_layer_input is provided (threaded from the training
+    loop). At the first step of a lifetime, prev is None and L_transition = 0.
     """
 
     def __init__(self, config: LifeEquationConfig):
         super().__init__()
         self.config = config
-        # Stub forward model: maps current hidden state to scalar future estimate
-        self.v_future = nn.Linear(config.d_model, 1)
+        # Ψ̃_L: one-step latent transition model
+        self.transition = nn.Linear(config.d_model, config.d_model, bias=False)
+        # Viability head: maps predicted next state → scalar estimate
+        self.v_head = nn.Linear(config.d_model, 1)
 
     def forward(
         self,
@@ -556,14 +646,31 @@ class ViabilityModule(nn.Module):
         gamma_eff: torch.Tensor,
         d_id: torch.Tensor,
         layer_input: torch.Tensor,
-    ) -> torch.Tensor:
-        """Returns V_self [B, 1]. Positive = viable. Below theta_vol = Δ_vol candidate."""
+        prev_layer_input: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Returns (V_self [B, 1], L_transition scalar).
+
+        V_self: positive = viable; below theta_vol = Δ_vol candidate.
+        L_transition: forward model accuracy loss (0 at first step of lifetime).
+        """
         # Extract V_self weight components from Z_values (last 5 indices)
         w = state.Z_values[:, -5:]   # [B, 5]: w_coh, w_drift, w_eps, w_cap, w_V
         w_coh, w_drift, w_eps_v, w_cap_v, w_V = w.unbind(dim=-1)
 
-        # Forward estimate (§0.5 Convention 2: detached from Mamba backward)
-        v_future = torch.sigmoid(self.v_future(layer_input.detach()))  # [B, 1]
+        # Ψ̃_L transition loss: train the forward model to predict the next state.
+        # transition(x_prev) should match x_current. Both detached — gradient flows
+        # only to transition.parameters(), not back through the hidden state.
+        if prev_layer_input is not None:
+            x_from_prev = self.transition(prev_layer_input.detach())
+            l_transition = F.mse_loss(x_from_prev, layer_input.detach())
+        else:
+            l_transition = torch.zeros(1, device=layer_input.device).squeeze()
+
+        # v_future: viability of the PREDICTED next state (forward-model-informed).
+        # transition(current) → what this state will likely become → how viable is that?
+        # Detached from Mamba backward (§0.5 Convention 2).
+        x_next_pred = self.transition(layer_input.detach())          # [B, d_model]
+        v_future = torch.sigmoid(self.v_head(x_next_pred))           # [B, 1]
 
         # Angular drift: γ_eff * (1 - cos(Z_id, I_0)), bounded [0, 2], scale-invariant.
         # Replaces the old γ_eff * D_id / ||I_0|| formulation which had two problems:
@@ -574,8 +681,9 @@ class ViabilityModule(nn.Module):
         # (no stable seed → no meaningful drift to measure yet).
         i0_norm = state.I_0.norm()
         has_seed = (i0_norm > 1e-3).float()  # 0.0 at fresh reset, 1.0 once I_0 is meaningful
-        z_id_flat = state.Z_id.real.flatten(1)  # [B, n_id_heads * d_state]
-        i0_flat   = state.I_0.real.flatten(1)   # [B, n_id_heads * d_state]
+        # Z_id and I_0 are now real [B, n_id_heads, d_model].
+        z_id_flat = state.Z_id.flatten(1)   # [B, n_id_heads * d_model]
+        i0_flat   = state.I_0.flatten(1)    # [B, n_id_heads * d_model]
         cos_sim = F.cosine_similarity(z_id_flat, i0_flat, dim=-1, eps=1e-6).unsqueeze(-1)
         drift_weighted = has_seed * gamma_eff * (1.0 - cos_sim).clamp(min=0.0)  # [B, 1]
 
@@ -590,4 +698,4 @@ class ViabilityModule(nn.Module):
             - w_cap_v.unsqueeze(-1) * cap_depletion
             + w_V.unsqueeze(-1) * v_future
         )
-        return v_self  # [B, 1]
+        return v_self, l_transition  # [B, 1], scalar

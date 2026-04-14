@@ -38,7 +38,7 @@ class LifeEquationConfig:
     attention_anchors: Tuple[int, ...] = (0, 9, 18, 27)
     n_heads: int = 48
     n_id_heads: int = 8
-    d_state: int = 64
+    d_state: int = 128
     d_mod: int = 64
     d_att: int = 48
     d_eps: int = 64

@@ -34,7 +34,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "V2"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "V3"))
 
 import torch
 import torch.nn.functional as F
@@ -42,9 +42,9 @@ from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
-from life_eq_v2.config import LifeEquationConfig
-from life_eq_v2.model import LifeEquationModel, ForwardOutputs
-from life_eq_v2.state import FullState
+from life_eq_v3.config import LifeEquationConfig
+from life_eq_v3.model import LifeEquationModel, ForwardOutputs
+from life_eq_v3.state import FullState
 
 
 # ---------------------------------------------------------------------------

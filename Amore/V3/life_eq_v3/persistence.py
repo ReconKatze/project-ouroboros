@@ -3,9 +3,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import time
-from typing import Dict, Optional
-
-import torch
+from pathlib import Path
+from typing import Dict, Optional, Union
 
 import torch
 
@@ -14,8 +13,15 @@ from .state import FullState, ManifestEntry, pool_complex_state, zero_state
 
 
 class StateStore:
-    def __init__(self, config: LifeEquationConfig):
+    def __init__(
+        self,
+        config: LifeEquationConfig,
+        root_dir: Optional[Union[str, Path]] = None,
+    ):
         self.config = config
+        self._root_dir = Path(root_dir) if root_dir is not None else None
+        if self._root_dir is not None:
+            self._root_dir.mkdir(parents=True, exist_ok=True)
         self._artifacts: Dict[str, Dict[str, object]] = {}
 
     def _model_hash(self) -> str:
@@ -99,9 +105,17 @@ class StateStore:
             "manifest_entry": entry,
         }
         self._artifacts[state_id] = artifact
+        if self._root_dir is not None:
+            torch.save(artifact, self._root_dir / f"{state_id}.pt")
         return state_id
 
     def load_state(self, state_id: str) -> FullState:
+        if state_id not in self._artifacts and self._root_dir is not None:
+            disk_path = self._root_dir / f"{state_id}.pt"
+            if disk_path.exists():
+                self._artifacts[state_id] = torch.load(
+                    disk_path, map_location="cpu", weights_only=False
+                )
         artifact = self._artifacts[state_id]
         if artifact["model_hash"] != self._model_hash():
             raise ValueError("Model hash mismatch.")
@@ -139,7 +153,7 @@ class StateStore:
         The successor inherits who the system BECAME, not who it was told to be.
         No external agent can force this. No timer triggers it.
         """
-        return {
+        archive = {
             "autobiography": state.Z_auto.detach().cpu().clone(),
             "narrative": state.Z_narr.detach().cpu().clone(),
             "identity": state.Z_id.detach().cpu().clone(),   # Who it BECAME, not I_0
@@ -148,6 +162,10 @@ class StateStore:
             "maturity": state.Z_mat.detach().cpu().clone(),
             "timestamp": time.time(),
         }
+        if self._root_dir is not None:
+            archive_path = self._root_dir / f"voluntary_end_{int(archive['timestamp'])}.pt"
+            torch.save(archive, archive_path)
+        return archive
 
     def spawn_successor(self, final_archive: dict, batch_size: int = 1) -> FullState:
         """§30 v15: Create successor from a system that chose voluntary consolidation.

@@ -13,5 +13,9 @@ def build_config(variant_name: str, config: Optional[LifeEquationConfig] = None)
     return replace(base, variant_profile=get_variant_profile(variant_name))
 
 
-def build_model(variant_name: str, config: Optional[LifeEquationConfig] = None) -> LifeEquationModel:
-    return LifeEquationModel(build_config(variant_name, config))
+def build_model(
+    variant_name: str,
+    config: Optional[LifeEquationConfig] = None,
+    state_store_dir: Optional[str] = None,
+) -> LifeEquationModel:
+    return LifeEquationModel(build_config(variant_name, config), state_store_dir=state_store_dir)

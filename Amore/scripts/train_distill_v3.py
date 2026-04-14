@@ -143,6 +143,10 @@ def parse_args():
     p.add_argument("--post-event-steps-critical", type=int, default=64)
     p.add_argument("--baseline-window", type=int, default=100)
     p.add_argument("--forensic-cooldown", type=int, default=50)
+    p.add_argument("--resume", default=None,
+                   help="Path to a checkpoint .pt file to resume training from")
+    p.add_argument("--checkpoint-every", type=int, default=0,
+                   help="Save a periodic checkpoint every N steps (0 = final only)")
     return p.parse_args()
 
 
@@ -200,13 +204,34 @@ def main():
     le_state = student.init_state(batch_size=1)
     best_loss = float("inf")
     last_completed_step = 0
+    start_step = 0
+
+    if args.resume and os.path.exists(args.resume):
+        ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+        student.load_state_dict(ckpt["model_state"], strict=False)
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        # load_state_dict maps everything to CPU; move optimizer moments back to device
+        for param_state in optimizer.state.values():
+            for k, v in param_state.items():
+                if isinstance(v, torch.Tensor):
+                    param_state[k] = v.to(device)
+        saved_le = ckpt.get("le_state", {})
+        le_state = FullState(**{
+            k: (v.to(device) if isinstance(v, torch.Tensor) else v)
+            for k, v in saved_le.items()
+        })
+        le_state.manifest = []   # manifest is ephemeral; rebuilt fresh each run
+        start_step = ckpt.get("step", 0)
+        best_loss = ckpt.get("best_loss", float("inf"))
+        last_completed_step = start_step
+        print(f"Resumed from step {start_step}: {args.resume}")
 
     def flush_finished_events(finished_events: list[dict], checkpoint_path: str | None) -> None:
         for ctx in finished_events:
             event_dir = forensic.write_bundle(ctx, checkpoint_path=checkpoint_path)
             print(f"forensic bundle saved: {event_dir}")
 
-    for step in range(1, args.steps + 1):
+    for step in range(start_step + 1, args.steps + 1):
         pre_state = detach_state(le_state)
         input_ids = next_chunk().unsqueeze(0).to(device)
         with torch.no_grad():
@@ -313,6 +338,21 @@ def main():
             scaler.update()
         else:
             optimizer.step()
+
+        if args.checkpoint_every > 0 and step % args.checkpoint_every == 0:
+            periodic_path = str(Path(args.out).with_suffix("")) + f"_step{step:06d}.pt"
+            save_checkpoint(
+                periodic_path,
+                checkpoint_payload(
+                    args=args,
+                    step=step,
+                    model=student,
+                    optimizer=optimizer,
+                    le_state=le_state,
+                    best_loss=best_loss,
+                ),
+            )
+            print(f"periodic checkpoint saved: {periodic_path}")
 
         replay_entry = build_lightweight_replay_entry(
             step=step,

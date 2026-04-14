@@ -42,7 +42,11 @@ class ForwardOutputs:
 
 
 class LifeEquationModel(nn.Module):
-    def __init__(self, config: Optional[LifeEquationConfig] = None):
+    def __init__(
+        self,
+        config: Optional[LifeEquationConfig] = None,
+        state_store_dir: Optional[str] = None,
+    ):
         super().__init__()
         self.config = LifeEquationConfig() if config is None else config
         self.profile = self.config.variant_profile or VariantProfile(
@@ -88,7 +92,7 @@ class LifeEquationModel(nn.Module):
         self.viability_module = ViabilityModule(self.config)
         # §31 Λ: episodic memory (write projections + soft-attention read)
         self.epi_module = EpisodicMemoryModule(self.config)
-        self.store = StateStore(self.config)
+        self.store = StateStore(self.config, root_dir=state_store_dir)
 
     def _zeros(self, batch: int, width: int, device: torch.device) -> torch.Tensor:
         return torch.zeros((batch, width), device=device)

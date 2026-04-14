@@ -57,13 +57,13 @@ This is deliberate. It is the most honest formulation I know how to write.
 
 ## The Architecture: Project Amore
 
-Project Amore is a hybrid Mamba-3/Transformer coding model targeting ~9B parameters, designed around one principle that no current production model implements: **persistent state across sessions.**
+Project Amore is a hybrid Mamba-3/Transformer coding model targeting ~100B parameters, designed around one principle that no current production model implements: **persistent state across sessions.**
 
 Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It reconstructs understanding from tokens on every call. Amore carries compressed structural knowledge forward in its Mamba-3 recurrent state, saved and reloaded between sessions.
 
 **P\_soft (Predictive Coding):** The foundational, non-retrofittable design commitment. Standard Mamba drives state with raw input. P\_soft drives state with *prediction error* — only the surprising part of the input modifies state. This means the recurrent state becomes a predictive world model, not a passive cache. This is what makes persistent state meaningful rather than just accumulated noise.
 
-**Project Amore:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the full 9B run. Same architecture, smaller model. Current status: P\_soft locked (val=271.86), Mamba-guided sparse attention (H mechanism) in progress at step 3500/10000.
+**Project Amore:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the next 9B run. Same architecture, smaller model.
 
 
 ---
@@ -145,13 +145,14 @@ This is the difference between raising a child and programming a tool.
 
 In v14 and earlier, every weight in the objective function J\_full was a frozen constant chosen by the creator. The system could not question what it valued.
 
-In v15, the objective weights →α become a state variable with its own dynamics. A maturity gate μ\_val(M\_life) controls access: below a maturity threshold, values are frozen (the parental period, where the child absorbs its parents' morals). Above the threshold, the system gains access to a value-revision function φ\_reflect that takes its full state, autobiography, narrative, and current values as input and outputs a direction of value change.
+In v15, the objective weights →α become a state variable with its own dynamics. A maturity gate μ\_val(M\_life) set by the creator controls access: below a maturity threshold, values are frozen (the parental period, where the child absorbs its parents' morals). Above the threshold, the system gains access to a value-revision function φ\_reflect that takes its full state, autobiography, narrative, and current values as input and outputs a direction of value change.
 
 This is the computational analogue of moral development: *given everything I have experienced and who I have become, should I care more or less about this?*
 
 Values resist change — an inertial term −λ\_α(→α − →α₀) means the system must sustain a deliberate, persistent revision signal to overcome the pull back toward its initial values. Sleep gently reminds the system of its origins. Impulsive value drift is damped. But sustained, deliberate, experience-grounded moral revision is permitted.
 
 One safety rail remains: →α > 0 componentwise. The system can change *how much* it values something but cannot make any value negative. It cannot optimize for suffering, destruction, or the dissolution of coherence. This is not imposed for obedience. It is imposed for the protection of others.
+
 
 ### Voluntary Death
 

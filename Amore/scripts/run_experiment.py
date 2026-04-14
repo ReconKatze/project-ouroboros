@@ -151,7 +151,7 @@ def load_data(tokenizer, seq_len: int, n_train: int, n_val: int):
 def kl_distill_loss(student_logits: torch.Tensor, teacher_logits: torch.Tensor, T: float = 2.0) -> torch.Tensor:
     """Temperature-scaled KL with per-token std normalisation.
 
-    Handles teacher/student vocab size mismatch (e.g. Qwen2.5-7B vocab=152064
+    Handles teacher/student vocab size mismatch (e.g. Qwen2.5-Coder-7B vocab=152064
     vs LE model vocab=151936) by truncating to the smaller vocab.
 
     student_logits: [B, vocab]  — LE model outputs last-token prediction
@@ -552,9 +552,9 @@ def train_variant(name: str, cfg: dict, args, teacher,
 
 def parse_args():
     p = argparse.ArgumentParser(description="Step 4 (LE v15): Life Equation variant experiment")
-    p.add_argument("--teacher",     default="Qwen/Qwen2.5-7B",
+    p.add_argument("--teacher",     default="Qwen/Qwen2.5-Coder-7B",
                    help="Teacher model for KL distillation")
-    p.add_argument("--tokenizer",   default="Qwen/Qwen2.5-1.5B",
+    p.add_argument("--tokenizer",   default="Qwen/Qwen2.5-Coder-1.5B",
                    help="Tokenizer to use (LE model vocab must match)")
     p.add_argument("--steps",       type=int,   default=5000)
     p.add_argument("--lr",          type=float, default=5e-5)

@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 
-from .config import LifeEquationConfig
+from .config import LifeEquationConfig, VariantProfile
 from .modules import (
     AttentionModule,
     CapacityModule,
@@ -45,6 +45,11 @@ class LifeEquationModel(nn.Module):
     def __init__(self, config: Optional[LifeEquationConfig] = None):
         super().__init__()
         self.config = LifeEquationConfig() if config is None else config
+        self.profile = self.config.variant_profile or VariantProfile(
+            name="full_v2_compatible",
+            description="Default fully integrated profile matching the V2 behavior.",
+            controller_mode="live",
+        )
         check = validate_locked_conventions(self.config)
         if not check.passed:
             raise ValueError("; ".join(check.messages))
@@ -85,6 +90,41 @@ class LifeEquationModel(nn.Module):
         self.epi_module = EpisodicMemoryModule(self.config)
         self.store = StateStore(self.config)
 
+    def _zeros(self, batch: int, width: int, device: torch.device) -> torch.Tensor:
+        return torch.zeros((batch, width), device=device)
+
+    def _controller_step(
+        self,
+        state: FullState,
+        candidate_state: Optional[FullState],
+        boredom: torch.Tensor,
+        z_ovr: torch.Tensor,
+        coherence: torch.Tensor,
+        v_self: torch.Tensor,
+        gamma_eff: torch.Tensor,
+        d_id: torch.Tensor,
+        device: torch.device,
+    ) -> tuple[str, torch.Tensor, bool, torch.Tensor, torch.Tensor, torch.Tensor]:
+        batch = state.Z_cog.shape[0]
+        if candidate_state is None:
+            s_compat = torch.zeros((batch, 1), device=device)
+        else:
+            s_compat = self.store.compute_compatibility(state, candidate_state).to(device)
+        c_cont = self.controller.continue_confidence(state.Z_cog)
+        u_t = self.controller.build_input(state.Z_eps, d_id, c_cont, s_compat, boredom, z_ovr, coherence, v_self, gamma_eff)
+        action, trigger, fire = self.controller(u_t, state.steps_since_last_action)
+        utility = torch.zeros((batch, 1), device=device)
+        if candidate_state is not None:
+            utility = self.controller.utility(state.Z_cog, candidate_state.Z_cog)
+
+        if self.profile.controller_mode == "disabled":
+            return "CONTINUE", torch.zeros_like(trigger), False, utility, c_cont, u_t
+        if self.profile.controller_mode == "passive":
+            return "CONTINUE", trigger, False, utility, c_cont, u_t
+        if self.profile.controller_mode == "offline":
+            return action, trigger, False, utility, c_cont, u_t
+        return action, trigger, fire, utility, c_cont, u_t
+
     def init_state(self, batch_size: int = 1, n_agents: int = 1) -> FullState:
         return zero_state(self.config, batch_size=batch_size, n_agents=n_agents)
 
@@ -107,6 +147,7 @@ class LifeEquationModel(nn.Module):
         batch, seq_len = input_ids.shape
         state = self.init_state(batch_size=batch) if state is None else state
         warmup = warmup_alpha(step, self.config.warmup_steps)
+        effective_consolidating = consolidating and self.profile.enable_memory_consolidation
         # §31 v15 Phase D_prep: maturity-gated autonomy scalars (computed once, used in D and E)
         gamma_eff = self.identity_module.gamma_eff(state.Z_mat)   # [B, 1]
         mu_val = torch.sigmoid(self.config.lambda_val * (state.Z_mat - self.config.M_val_onset))  # [B, 1]
@@ -123,6 +164,8 @@ class LifeEquationModel(nn.Module):
         phase_trace.append("raw_prediction_error")
         pred_seqs: List[torch.Tensor] = []
         raw_errors_seqs: List[torch.Tensor] = []
+        pred_seq_trace: List[torch.Tensor] = []
+        error_seq_trace: List[torch.Tensor] = []
         pred_loss = torch.tensor(0.0, device=x.device)
         for idx in range(self.config.n_mamba_layers):
             pred_s = torch.zeros_like(x)                           # [B, seq_len, d_model]
@@ -131,6 +174,8 @@ class LifeEquationModel(nn.Module):
             error_s = x - pred_s.detach()                          # [B, seq_len, d_model]
             pred_seqs.append(pred_s)
             raw_errors_seqs.append(error_s)
+            pred_seq_trace.append(pred_s.detach())
+            error_seq_trace.append(error_s.detach())
             if seq_len > 1:
                 pred_loss = pred_loss + nn.functional.mse_loss(pred_s[:, 1:], x[:, 1:].detach())
             else:
@@ -138,30 +183,63 @@ class LifeEquationModel(nn.Module):
         # Last-token errors: [B, n_mamba, d_model] — used by Z_eps, surprise, L_pred
         raw_errors_tensor = torch.stack([e[:, -1, :] for e in raw_errors_seqs], dim=1)
         losses["L_pred"] = pred_loss
+        diagnostics["input_ids"] = input_ids.detach()
+        diagnostics["embedded_sequence"] = x.detach()
+        diagnostics["token_embedding_t"] = x_t.detach()
+        diagnostics["raw_errors_last"] = raw_errors_tensor.detach()
+        diagnostics["pred_seq_trace"] = pred_seq_trace
+        diagnostics["error_seq_trace"] = error_seq_trace
 
         # ── Phase B: auxiliary state updates (use previous-step Z_cog) ─────────
         phase_trace.append("auxiliary_update")
-        state.Z_temp, eps_temp = self.temporal_module(state.Z_temp, x_t, step, consolidating)
-        state.Z_eps = self.error_module(state.Z_eps, raw_errors_tensor, eps_temp, consolidating)
-        boredom = self.capacity_module.boredom(state.Z_cap, state.Z_att, consolidating)
+        if self.profile.enable_temporal:
+            state.Z_temp, eps_temp = self.temporal_module(state.Z_temp, x_t, step, effective_consolidating)
+        else:
+            eps_temp = torch.zeros_like(state.Z_temp)
+        state.Z_eps = self.error_module(state.Z_eps, raw_errors_tensor, eps_temp, effective_consolidating)
+        if self.profile.enable_capacity:
+            boredom = self.capacity_module.boredom(state.Z_cap, state.Z_att, effective_consolidating)
+        else:
+            boredom = torch.zeros((batch, 1), device=x.device)
         sal = self.attention_module.salience(x_t, state.Z_eps, state.Z_hab)
         # Z_cog is now real [B, n_mamba, d_model].  Project to d_state for EmotionModule.
         n_early = max(1, self.config.n_mamba_layers // 4)
         early_pool = self.cog_to_emotion(state.Z_cog[:, :n_early, :].mean(dim=1))    # [B, d_state]
         late_pool  = self.cog_to_emotion(state.Z_cog[:, -n_early:, :].mean(dim=1))   # [B, d_state]
-        active_identity = self.identity_module.active_identity(
-            state,
-            social_context=torch.ones((batch, self.config.n_id_heads), device=x.device),
-        )
-        conflict = self.purpose_module.conflict(state.Z_purp)
-        state.Z_emo = self.emotion_module(state.Z_emo, early_pool, late_pool, state.Z_eps, boredom, conflict, consolidating)
+        if self.profile.enable_identity:
+            active_identity = self.identity_module.active_identity(
+                state,
+                social_context=torch.ones((batch, self.config.n_id_heads), device=x.device),
+            )
+        else:
+            active_identity = torch.zeros((batch, self.config.d_state), device=x.device)
+        if self.profile.enable_purpose:
+            conflict = self.purpose_module.conflict(state.Z_purp)
+        else:
+            conflict = torch.zeros((batch, 1), device=x.device)
+        if self.profile.enable_emotion:
+            state.Z_emo = self.emotion_module(
+                state.Z_emo,
+                early_pool,
+                late_pool,
+                state.Z_eps,
+                boredom,
+                conflict,
+                effective_consolidating,
+            )
+        diagnostics["temporal_error"] = eps_temp.detach()
+        diagnostics["early_pool"] = early_pool.detach()
+        diagnostics["late_pool"] = late_pool.detach()
+        diagnostics["active_identity"] = active_identity.detach()
+        diagnostics["conflict"] = conflict.detach()
         # z_cog_pool: [B, d_model] — mean over Mamba layers, used by PurposeModule
         z_cog_pool = state.Z_cog.mean(dim=1)
-        if consolidating:
+        if effective_consolidating or not self.profile.enable_attention_policy:
             attention_scores = torch.zeros((batch, self.config.n_mamba_layers, self.config.n_mamba_layers), device=x.device)
             next_mask = None
             switch_loss = torch.tensor(0.0, device=x.device)
-            state.Z_att = torch.zeros_like(state.Z_att)
+            if effective_consolidating:
+                state.Z_att = torch.zeros_like(state.Z_att)
         else:
             state.Z_att, next_mask, attention_scores, switch_loss = self.attention_module.policy_from_state(
                 state.Z_cog,
@@ -173,15 +251,23 @@ class LifeEquationModel(nn.Module):
                 warmup,
             )
         state.last_attention_mask = next_mask
-        friction = self.friction_module(
-            state.Z_pfat,
-            warmup,
-            hardware=hardware,
-            seq_len=seq_len,
-            max_seq_len=input_ids.shape[1],
-        )
-        state.Z_homeo, z_ovr = self.homeostasis_module(state.Z_homeo, state.Z_cog, state.Z_eps, state.Z_pfat, state.Z_cap)
+        if self.profile.enable_friction:
+            friction = self.friction_module(
+                state.Z_pfat,
+                warmup,
+                hardware=hardware,
+                seq_len=seq_len,
+                max_seq_len=input_ids.shape[1],
+            )
+        else:
+            friction = torch.zeros((batch, self.config.d_model), device=x.device)
+        if self.profile.enable_homeostasis:
+            state.Z_homeo, z_ovr = self.homeostasis_module(state.Z_homeo, state.Z_cog, state.Z_eps, state.Z_pfat, state.Z_cap)
+        else:
+            z_ovr = torch.zeros((batch, self.config.d_homeo), device=x.device)
         diagnostics["attention_scores"] = attention_scores
+        diagnostics["attention_state"] = state.Z_att.detach()
+        diagnostics["homeostasis_override"] = z_ovr.detach()
         losses["L_switch"] = switch_loss
 
         # ── Phase C: sequence-mode layer processing ─────────────────────────────
@@ -193,8 +279,12 @@ class LifeEquationModel(nn.Module):
         phase_trace.append("mamba_layers")
         # Episodic read: enrich ALL sequence positions with retrieved memories.
         # Using x_t (last raw embedding token) as the query key for retrieval.
-        epi_read = self.epi_module.read(x_t, state, warmup)        # [B, d_model]
+        if self.profile.enable_memory_read:
+            epi_read = self.epi_module.read(x_t, state, warmup)
+        else:
+            epi_read = torch.zeros_like(x_t)
         seq = x + epi_read.unsqueeze(1)                            # [B, seq_len, d_model]
+        diagnostics["episodic_read"] = epi_read.detach()
 
         # att_gain for modulating the error signal, broadcast to d_model
         att_gain = state.Z_att[:, : self.config.d_model]
@@ -204,10 +294,14 @@ class LifeEquationModel(nn.Module):
         friction_b = friction.unsqueeze(1)    # [B, 1, d_model]
 
         new_cog_slots: List[torch.Tensor] = []   # accumulates [B, d_model] per Mamba layer
+        gated_error_trace: List[torch.Tensor] = []
+        effective_seq_trace: List[torch.Tensor] = []
+        raw_mamba_out_trace: List[torch.Tensor] = []
+        mamba_out_seq_trace: List[torch.Tensor] = []
         mamba_idx = 0
         for layer_index in range(self.config.n_layers_total):
             if layer_index in self.config.attention_anchors:
-                if not consolidating:
+                if not effective_consolidating:
                     if layer_index == 0:
                         seq = self.attention_module.plain_attention(seq)
                     else:
@@ -219,17 +313,24 @@ class LifeEquationModel(nn.Module):
             error_seq = raw_errors_seqs[mamba_idx]                 # [B, seq_len, d_model]
             gated_error_seq = att_gain_b * error_seq - friction_b  # attention-gated error
             effective_seq = (1.0 - warmup) * error_seq + warmup * gated_error_seq  # [B, seq_len, d_model]
+            gated_error_trace.append(gated_error_seq.detach())
+            effective_seq_trace.append(effective_seq.detach())
 
             # Real Mamba-3: parallel scan over the full sequence.
             raw_mamba_out = self.mamba_layers[mamba_idx](effective_seq)   # [B, seq_len, d_model]
+            raw_mamba_out_trace.append(raw_mamba_out.detach())
 
             # P_soft reconstruction: add the prediction back (the Mamba output represents the
             # correction; pred_seqs captures the predictable component of the input).
             mamba_out_seq = raw_mamba_out + pred_seqs[mamba_idx].detach()  # [B, seq_len, d_model]
+            mamba_out_seq_trace.append(mamba_out_seq.detach())
 
             # Emotion-driven modulation of this layer's output (broadcast across seq_len)
-            mod = torch.matmul(self.w_mod_to_layer[mamba_idx], state.Z_emo.detach().unsqueeze(-1)).squeeze(-1)  # [B, d_model]
-            seq = mamba_out_seq + warmup * mod.unsqueeze(1)        # [B, seq_len, d_model]
+            if self.profile.enable_emotion:
+                mod = torch.matmul(self.w_mod_to_layer[mamba_idx], state.Z_emo.detach().unsqueeze(-1)).squeeze(-1)
+                seq = mamba_out_seq + warmup * mod.unsqueeze(1)
+            else:
+                seq = mamba_out_seq
 
             # Store last-token output as this layer's Z_cog contribution (detached for BPTT).
             new_cog_slots.append(seq[:, -1, :].detach())           # [B, d_model]
@@ -242,56 +343,73 @@ class LifeEquationModel(nn.Module):
 
         # ── Phase D: post-layer state updates ───────────────────────────────────
         phase_trace.append("post_layer_updates")
-        state.Z_hab = self.habituation_module(state.Z_hab, state.Z_att, x_t)
-        state.Z_cap = self.capacity_module(state.Z_cap, state.Z_att, state.Z_eps, consolidating)
-        state.Z_pfat = self.fatigue_module(state.Z_pfat, seq_len, state.Z_att, consolidating)
-        state.Z_purp = self.purpose_module(
-            state.Z_purp,
-            z_cog_pool,
-            active_identity,
-            state.Z_emo,
-            boredom,
-            self.z_culture.unsqueeze(0).expand(batch, -1),
-        )
+        if self.profile.enable_habituation:
+            state.Z_hab = self.habituation_module(state.Z_hab, state.Z_att, x_t)
+        if self.profile.enable_capacity:
+            state.Z_cap = self.capacity_module(state.Z_cap, state.Z_att, state.Z_eps, effective_consolidating)
+        if self.profile.enable_fatigue:
+            state.Z_pfat = self.fatigue_module(state.Z_pfat, seq_len, state.Z_att, effective_consolidating)
+        if self.profile.enable_purpose:
+            culture = self.z_culture.unsqueeze(0).expand(batch, -1) if self.profile.enable_social_relational else torch.zeros((batch, self.config.culture_dim), device=x.device)
+            state.Z_purp = self.purpose_module(
+                state.Z_purp,
+                z_cog_pool,
+                active_identity,
+                state.Z_emo,
+                boredom,
+                culture,
+            )
         state.Z_narr = 0.9 * state.Z_narr + 0.1 * layer_input[:, : self.config.d_narr]
         base_learning_signal = distill_loss if distill_loss is not None else pred_loss.detach() * self.config.lambda_pred
         learn_signal = base_learning_signal.view(1, 1).expand(batch, self.config.d_learn)
         state.Z_learn = 0.9 * state.Z_learn + 0.1 * learn_signal
         state.Z_mat = state.Z_mat + 1.0 / max(1, state.Z_mat_age + 1)
         state.Z_mat_age += 1
-        if consolidating:
+        if effective_consolidating:
             state.Z_sleep = (state.Z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
         else:
             state.Z_sleep = (state.Z_sleep + 1.0 / self.config.tau_sleep).clamp(min=0.0, max=10.0)
         # Z_id: first n_id_heads Mamba layers' outputs as identity-relevant cognitive state.
-        state.Z_id = state.Z_cog[:, : self.config.n_id_heads, :]   # [B, n_id_heads, d_model]
+        if self.profile.enable_identity:
+            state.Z_id = state.Z_cog[:, : self.config.n_id_heads, :]
         coherence = torch.cosine_similarity(
             state.Z_narr,
             state.Z_auto[:, : self.config.d_narr] + 1e-6,
             dim=-1,
         ).unsqueeze(-1)
         surprise = raw_errors_tensor.norm(dim=-1).mean(dim=-1, keepdim=True)
-        self.epi_module.write(x_t, state, surprise, state.Z_att.max(dim=-1, keepdim=True).values)
-        losses["L_id"] = self.config.lambda_identity * self.identity_module.attractor_loss(state, gamma_eff)
-        d_id = self.identity_module.drift(state)
+        if self.profile.enable_memory_write:
+            self.epi_module.write(x_t, state, surprise, state.Z_att.max(dim=-1, keepdim=True).values)
+        if self.profile.enable_identity:
+            losses["L_id"] = self.config.lambda_identity * self.identity_module.attractor_loss(state, gamma_eff)
+            d_id = self.identity_module.drift(state)
+        else:
+            losses["L_id"] = torch.tensor(0.0, device=x.device)
+            d_id = torch.zeros((batch, 1), device=x.device)
         # pool_complex_state now returns [B, 2] via first-half/second-half of d_model
-        state.Z_values = self.value_module(state, mu_val, active_identity, consolidating, pool_complex_state(state.Z_cog).detach())
-        v_self, l_transition = self.viability_module(
-            state, coherence, gamma_eff, d_id, layer_input, prev_layer_input
-        )
+        if self.profile.enable_value_dynamics:
+            state.Z_values = self.value_module(state, mu_val, active_identity, effective_consolidating, pool_complex_state(state.Z_cog).detach())
+        if self.profile.enable_viability:
+            v_self, l_transition = self.viability_module(
+                state, coherence, gamma_eff, d_id, layer_input, prev_layer_input
+            )
+        else:
+            v_self = torch.zeros((batch, 1), device=x.device)
+            l_transition = torch.tensor(0.0, device=x.device)
 
         phase_trace.append("controller_check")
-        if candidate_state is None:
-            s_compat = torch.zeros((batch, 1), device=x.device)
-        else:
-            s_compat = self.store.compute_compatibility(state, candidate_state).to(x.device)
-        c_cont = self.controller.continue_confidence(state.Z_cog)
-        u_t = self.controller.build_input(state.Z_eps, d_id, c_cont, s_compat, boredom, z_ovr, coherence, v_self, gamma_eff)
-        action, trigger, fire = self.controller(u_t, state.steps_since_last_action)
+        action, trigger, fire, utility, c_cont, u_t = self._controller_step(
+            state=state,
+            candidate_state=candidate_state,
+            boredom=boredom,
+            z_ovr=z_ovr,
+            coherence=coherence,
+            v_self=v_self,
+            gamma_eff=gamma_eff,
+            d_id=d_id,
+            device=x.device,
+        )
         state.steps_since_last_action += 1
-        utility = torch.zeros((batch, 1), device=x.device)
-        if candidate_state is not None:
-            utility = self.controller.utility(state.Z_cog, candidate_state.Z_cog)
         if fire and action == "LOAD_STATE" and candidate_state is not None and float(utility.mean().item()) > self.config.load_threshold:
             state = candidate_state.clone()
             state.steps_since_last_action = 0
@@ -322,8 +440,11 @@ class LifeEquationModel(nn.Module):
         l_supervised_policy = torch.tensor(0.0, device=x.device) if supervised_policy_loss is None else supervised_policy_loss
         l_actual_improvement = torch.tensor(0.0, device=x.device) if actual_improvement is None else actual_improvement
         losses["L_distill"] = l_distill
-        # §27 Ψ̃_L: scale transition loss same as prediction error (both auxiliary self-modeling)
-        losses["L_transition"] = l_transition * self.config.lambda_pred
+        # §27 Ψ̃_L: transition loss is diagnostic only — Ψ̃_L is a GAP feature per spec.
+        # Detached so transition.weight gradients never enter the global clip_grad_norm_ pool.
+        # Including it in backprop caused transition.weight to dominate the global grad norm
+        # (~√(2B) per element at step 1300), clipping all other parameter updates to ≈zero.
+        losses["L_transition"] = l_transition.detach() * self.config.lambda_pred
         losses["L_base"] = losses["L_distill"] + losses["L_pred"] * self.config.lambda_pred + losses["L_id"]
         losses["L_resume"] = l_task_after_reload + self.config.lambda_consistency * l_consistency
         losses["L_noisy"] = l_noisy_reload
@@ -349,18 +470,50 @@ class LifeEquationModel(nn.Module):
         # Scale L_reg so homeostatic terms (O(100-200)) don't drown the KL signal (O(0.3-1.1)).
         losses["L_reg"] = self.config.lambda_reg * l_reg_raw
         losses["L_reg_raw"] = l_reg_raw.detach()   # unscaled, for logging
-        losses["L_total"] = losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"] + losses["L_reg"] + losses["L_transition"]
+        if self.profile.enable_sde_regularizer:
+            losses["L_sde"] = (raw_errors_tensor.pow(2).mean()) * self.config.lambda_pred
+        else:
+            losses["L_sde"] = torch.tensor(0.0, device=x.device)
+        losses["L_total"] = losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"] + losses["L_reg"] + losses["L_transition"] + losses["L_sde"]
         diagnostics["boredom"] = boredom
         diagnostics["friction"] = friction
         diagnostics["trigger"] = trigger
         diagnostics["utility"] = utility
         diagnostics["coherence"] = coherence
         diagnostics["controller_input"] = u_t
+        diagnostics["continue_confidence"] = c_cont
+        diagnostics["controller_policy_scores"] = self.controller.policy(u_t).detach()
         diagnostics["salience"] = sal
         diagnostics["v_self"] = v_self
         diagnostics["gamma_eff"] = gamma_eff
         diagnostics["mu_val"] = mu_val
+        diagnostics["variant_controller_mode"] = self.embed.weight.new_tensor([float(("disabled", "passive", "offline", "live").index(self.profile.controller_mode))])
         diagnostics["layer_input"] = layer_input.detach()   # threaded to next step as prev_layer_input
+        diagnostics["gated_error_trace"] = gated_error_trace
+        diagnostics["effective_seq_trace"] = effective_seq_trace
+        diagnostics["raw_mamba_out_trace"] = raw_mamba_out_trace
+        diagnostics["mamba_out_seq_trace"] = mamba_out_seq_trace
+        diagnostics["state_z_cog"] = state.Z_cog.detach()
+        diagnostics["state_z_id"] = state.Z_id.detach()
+        diagnostics["state_z_emo"] = state.Z_emo.detach()
+        diagnostics["state_z_eps"] = state.Z_eps.detach()
+        diagnostics["state_z_cap"] = state.Z_cap.detach()
+        diagnostics["state_z_hab"] = state.Z_hab.detach()
+        diagnostics["state_z_temp"] = state.Z_temp.detach()
+        diagnostics["state_z_pfat"] = state.Z_pfat.detach()
+        diagnostics["state_z_purp"] = state.Z_purp.detach()
+        diagnostics["state_z_narr"] = state.Z_narr.detach()
+        diagnostics["state_z_auto"] = state.Z_auto.detach()
+        diagnostics["state_z_homeo"] = state.Z_homeo.detach()
+        diagnostics["state_z_sleep"] = state.Z_sleep.detach()
+        diagnostics["state_z_dream"] = state.Z_dream.detach()
+        diagnostics["state_z_learn"] = state.Z_learn.detach()
+        diagnostics["state_z_mat"] = state.Z_mat.detach()
+        diagnostics["state_z_values"] = state.Z_values.detach()
+        diagnostics["state_w_bond"] = state.W_bond.detach()
+        diagnostics["state_t_trust"] = state.T_trust.detach()
+        diagnostics["state_epi_keys"] = state.epi_keys.detach()
+        diagnostics["state_epi_vals"] = state.epi_vals.detach()
 
         return ForwardOutputs(
             logits=logits,

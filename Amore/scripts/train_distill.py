@@ -9,7 +9,7 @@ For multi-variant comparisons, use run_experiment.py.
 
 Usage (Colab A100/T4):
     python scripts/train_distill.py
-    python scripts/train_distill.py --teacher Qwen/Qwen2.5-7B --steps 1000
+    python scripts/train_distill.py --teacher Qwen/Qwen2.5-Coder-7B --steps 1000
 
 AMP: bfloat16 on A100/H100, float16 on T4.
 """
@@ -121,8 +121,8 @@ def verify_gradient_flow(model: LifeEquationModel) -> bool:
 
 def parse_args():
     p = argparse.ArgumentParser(description="Step 3 (LE v15): Single-variant distillation")
-    p.add_argument("--teacher",     default="Qwen/Qwen2.5-7B")
-    p.add_argument("--tokenizer",   default="Qwen/Qwen2.5-1.5B",
+    p.add_argument("--teacher",     default="Qwen/Qwen2.5-Coder-7B")
+    p.add_argument("--tokenizer",   default="Qwen/Qwen2.5-Coder-1.5B",
                    help="Tokenizer to use (must match LE config vocab_size=151936)")
     p.add_argument("--steps",       type=int,   default=500)
     p.add_argument("--lr",          type=float, default=5e-5)

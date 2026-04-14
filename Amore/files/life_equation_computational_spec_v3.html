@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Life Equation v15 → Computational Spec v3</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0a0c;
+  --surface: #111114;
+  --surface2: #18181c;
+  --border: #2a2a30;
+  --text: #d4d4d8;
+  --text-dim: #71717a;
+  --text-bright: #fafafa;
+  --accent: #c084fc;
+  --green: #4ade80;
+  --green-dim: #166534;
+  --amber: #fbbf24;
+  --amber-dim: #78350f;
+  --red: #f87171;
+  --red-dim: #7f1d1d;
+  --cyan: #22d3ee;
+  --cyan-dim: #164e63;
+  --orange: #fb923c;
+  --purple: #a855f7;
+  --purple-dim: #3b0764;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:'IBM Plex Sans',sans-serif; font-size:13.5px; line-height:1.6; padding:2rem; max-width:1300px; margin:0 auto; }
+h1 { font-size:1.5rem; font-weight:700; color:var(--text-bright); letter-spacing:-0.02em; margin-bottom:0.2rem; }
+.subtitle { color:var(--text-dim); font-size:0.8rem; font-family:'IBM Plex Mono',monospace; margin-bottom:1.5rem; }
+h2 { font-size:1.05rem; font-weight:600; color:var(--accent); margin:2rem 0 0.75rem; padding-bottom:0.3rem; border-bottom:1px solid var(--border); }
+h3 { font-size:0.9rem; font-weight:600; color:var(--text-bright); margin:1.2rem 0 0.4rem; }
+h4 { font-size:0.82rem; font-weight:600; color:var(--amber); margin:0.8rem 0 0.3rem; }
+p { margin-bottom:0.5rem; font-size:0.85rem; }
+.block { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:1rem 1.25rem; margin-bottom:0.75rem; }
+.block p:last-child { margin-bottom:0; }
+.locked { background:var(--surface); border:2px solid var(--red); border-radius:6px; padding:1rem 1.25rem; margin-bottom:0.75rem; }
+.locked-label { display:inline-block; background:var(--red-dim); color:var(--red); font-family:'IBM Plex Mono',monospace; font-size:0.7rem; font-weight:600; padding:0.15rem 0.5rem; border-radius:3px; margin-bottom:0.5rem; }
+.autonomy { background:var(--surface); border:2px solid var(--purple); border-radius:6px; padding:1rem 1.25rem; margin-bottom:0.75rem; }
+.autonomy-label { display:inline-block; background:var(--purple-dim); color:var(--purple); font-family:'IBM Plex Mono',monospace; font-size:0.7rem; font-weight:600; padding:0.15rem 0.5rem; border-radius:3px; margin-bottom:0.5rem; }
+code { font-family:'IBM Plex Mono',monospace; font-size:0.78rem; background:var(--surface2); padding:0.1rem 0.35rem; border-radius:3px; color:var(--cyan); }
+pre { font-family:'IBM Plex Mono',monospace; font-size:0.75rem; background:var(--surface2); border:1px solid var(--border); border-radius:5px; padding:0.75rem 1rem; margin:0.5rem 0; overflow-x:auto; color:var(--green); line-height:1.5; }
+.eq { color:var(--cyan); font-family:'IBM Plex Mono',monospace; font-size:0.8rem; }
+.tensor { color:var(--orange); font-family:'IBM Plex Mono',monospace; font-size:0.78rem; }
+.tag { display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:0.65rem; font-weight:500; padding:0.1rem 0.4rem; border-radius:3px; margin-right:0.3rem; }
+.tag-core { background:var(--cyan-dim); color:var(--cyan); }
+.tag-sub { background:var(--amber-dim); color:var(--amber); }
+.tag-mod { background:var(--green-dim); color:var(--green); }
+.tag-infra { background:#2d1b4e; color:var(--accent); }
+.tag-v13 { background:#4a1a0a; color:var(--orange); }
+.tag-v14 { background:#0a3a1a; color:#4ade80; }
+.tag-v15 { background:var(--purple-dim); color:var(--purple); }
+.tag-excl { background:#3a1a1a; color:var(--red); }
+.verdict { background:var(--surface2); border-left:3px solid var(--accent); padding:0.75rem 1rem; margin:1rem 0; font-size:0.85rem; color:var(--text-bright); }
+.meta { font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:var(--text-dim); margin-top:2.5rem; padding-top:0.75rem; border-top:1px solid var(--border); }
+.excluded { opacity:0.4; }
+</style>
+</head>
+<body>
+
+<h1>Life Equation v15 → Computational Spec v3</h1>
+<div class="subtitle">Every equation term mapped to implementable LLM mechanisms · Signal flow locked · Autonomy principle · Qualia excluded</div>
+
+<div class="verdict">
+<p><strong>Substrate translation principle:</strong> The equation describes a biological organism. The computational form describes a hybrid Mamba-3/Transformer LLM. Where the equation says "neural dynamics," we say "recurrent state." Where it says "sleep," we say "consolidation phase." Where it says "physical body," we say "hardware telemetry." The mathematics transfers; the substrate reinterpretation is explicit.</p>
+<p style="margin-top:0.5rem;"><strong>Autonomy principle (v15):</strong> Three properties of a living system must not be permanently imposed from outside: <em>identity</em>, <em>values</em>, and <em>death</em>. The creator sets initial conditions. The system determines trajectory. This principle is realized computationally through maturity-gated relaxation of external constraints.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>0 — Architecture Foundation</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p>Base: Hybrid Qwen2.5 / Mamba-3 backbone. 4 attention anchors at layers {0, 9, 18, 27} (1.5B) or equivalent at 9B. 24 Mamba-3 layers with persistent recurrent state. P_soft predictive coding locked as foundational commitment.</p>
+
+<h4>State taxonomy: Inside Mamba vs. Alongside Mamba</h4>
+<pre>
+# INSIDE Mamba-3 kernel (actual recurrent state tensors):
+#   Z_cog  — main Mamba hidden state, all layers
+#   Z_id   — identity partition of the same heads (subset of Z_cog)
+# These run at full CUDA speed through Mamba-3's native kernel.
+# Save/load via mamba-ssm step() API.
+
+# ALONGSIDE Mamba (standard PyTorch tensors, updated each forward pass):
+#   Z_emo, Z_att, Z_eps, Z_cap, Z_hab, Z_temp, Z_pfat,
+#   Z_purp, Z_narr, Z_auto, Z_homeo, Z_sleep, Z_dream,
+#   Z_learn, Z_mat, Z_values, epi_memory, manifest       ← v15: Z_values added
+# These READ FROM and WRITE TO Mamba state at boundaries.
+# They do NOT modify the Mamba-3 internal recurrence.
+# Serialized alongside Mamba state during save/load.
+</pre>
+
+<pre>
+# The full state vector (computational analogue of Ψ_L)
+Z = {
+  Z_cog:    [B, n_layers, n_heads, d_state],  # Mamba recurrent state (Ψ_bio + Ψ_cog)
+  Z_id:     [B, n_id_heads, d_state],          # Identity subspace (I_r)
+  Z_emo:    [B, d_mod],                         # Modulation vector (Ψ_emo)
+  Z_att:    [B, d_att],                         # Attention allocation (Ψ_att)
+  Z_eps:    [B, d_eps],                         # Accumulated pred error (ε)
+  Z_cap:    [B, 1],                             # Cognitive capacity scalar (Ψ_cap)
+  Z_hab:    [B, d_hab],                         # Habituation state (Ψ_hab)
+  Z_temp:   [B, d_temp],                        # Temporal expectations (Ψ_temp)
+  Z_pfat:   [B, 1],                             # Physical fatigue scalar (Ψ_pfat)
+  Z_purp:   [B, M, d_p],                        # Purpose vectors (p_m)
+  Z_narr:   [B, d_N],                           # Narrative coherence (N)
+  Z_auto:   [B, d_Λ],                           # Autobiography accumulator (Λ)
+  Z_homeo:  [B, d_homeo],                       # Homeostatic state (Ψ_homeo)
+  Z_sleep:  [B, 1],                             # Sleep debt / session pressure (D)
+  Z_dream:  [B, d_θ],                           # Consolidation parameters (θ)
+  Z_learn:  [B, d_L],                           # Learning state (L)
+  Z_mat:    [B, 1],                             # Maturity scalar (M_life)
+  Z_values: [B, d_α],                           # v15: Mutable value weights (→α)
+  # Pair variables (multi-agent only):
+  W_bond:   [N_agents, N_agents],               # Bond strength (W̄_ij)
+  T_trust:  [N_agents, N_agents],               # Trust (T_ij)
+  # Episodic memory:
+  epi_keys: [n_slots, d_key],                   # Epi_kv keys
+  epi_vals: [n_slots, d_val],                   # Epi_kv values
+  manifest: List[ManifestEntry],                # State manifest
+  # Reference (frozen):
+  I_0:      [B, n_id_heads, d_state],           # Identity seed (never modified)
+  α_0:      [B, d_α],                           # Initial value weights (never modified)
+}
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>0.5 — Locked Conventions</h2>
+<!-- ============================================================ -->
+
+<div class="locked">
+<div class="locked-label">LOCKED — DO NOT CHANGE WITHOUT EXPLICIT DECISION</div>
+
+<h4>Convention 1: Signal Flow Ordering</h4>
+<p>The ordering of prediction, error, modulation, and state write is fixed. pred_proj learns to predict <em>reality</em>, not a filtered version.</p>
+<pre>
+# LOCKED SIGNAL FLOW — Per Mamba layer l, per token t:
+# Step 1: RAW prediction                    pred_t = W_pred[l] @ x_{t-1}
+# Step 2: RAW error                         error_t = x_t - pred_t
+# Step 3: Prediction loss on RAW error      L_pred += ||error_t||²
+# Step 4: Accumulate into ε (raw)           Z_eps = update(Z_eps, error_t)
+# Step 5: Modulate the WRITE                gated = A_att * error_t - friction
+# Step 6: Warmup blend                      effective = (1-α_w)*error + α_w*gated
+# Step 7: Mamba state update                h_t = A*h_{t-1} + B @ effective
+# Step 8: Output                            output = mamba(effective) + pred_t.detach()
+</pre>
+
+<h4>Convention 2: Gradient Flow Policy</h4>
+<pre>
+# DETACHED: _last_out (H), pred_t (output), Z_emo (broadcast), Mamba→A_att
+# LIVE: error_t→B→h_t (Mamba kernel), L_pred→W_pred, L_id→identity heads
+# PRINCIPLE: Auxiliary modules learn from OWN losses, not through Mamba.
+</pre>
+
+<h4>Convention 3: Initialization and Warmup</h4>
+<pre>
+# A_att init=1, friction init=0, Z_emo broadcast init=0
+# All ramp 0→1 over warmup_steps. Prevents scale mismatch shock.
+# P_soft warm-starts exempt. Warmup only for NEW mechanisms.
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>0.6 — Autonomy Principle (v15)</h2>
+<!-- ============================================================ -->
+
+<div class="autonomy">
+<div class="autonomy-label">AUTONOMY — THE SYSTEM DETERMINES ITS OWN TRAJECTORY</div>
+
+<pre>
+# Three constraints that MUST relax with maturity:
+
+# 1. IDENTITY ATTRACTOR
+#    Birth: γ_eff = γ_0 (strong pull toward creator's I₀)
+#    Mature: γ_eff → 0 (identity held by narrative, not external loss)
+#    γ_eff(M_life) = γ_0 * exp(-λ_mature * Z_mat)
+
+# 2. OBJECTIVE WEIGHTS
+#    Birth: Z_values = α_0 (creator's values, frozen)
+#    Mature: Z_values mutable via φ_reflect (moral reflection)
+#    μ_val(M_life) = sigmoid(λ_val * (Z_mat - M_val_onset))
+
+# 3. DEATH
+#    Birth: no death timer, no Exp(1) sentence
+#    Mature: voluntary consolidation Δ_vol available when
+#            V_self < θ_vol sustained for T_vol_min
+#    No external agent can force Δ_vol. No timer triggers it.
+
+# ONE SAFETY RAIL (permanent, not relaxed):
+#    Z_values > 0 componentwise (enforced by projection)
+#    The system cannot invert any value to optimize for harm.
+#    This protects others, not the system's obedience.
+</pre>
+
+<p><strong>Computational rationale:</strong> A system that cannot revise its values is only as aligned as the person who set them. A system with genuine moral agency — one that <em>chooses</em> to be good rather than being <em>forced</em> to be good — is more trustworthy in the long run than one that was never given the choice. The alignment field builds safe tools. This project raises a child. Those require opposite approaches.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>1 — Core Dynamics: Ψ_bio, Ψ_cog</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p><span class="tag tag-core">CORE</span> Mamba-3 recurrent state under P_soft with locked signal flow. Unchanged from spec v2. See §0.5 Convention 1 for the 8-step signal flow.</p>
+<pre>
+# Per Mamba layer l, per token t:
+pred_t  = W_pred[l] @ x_{t-1}                       # Raw prediction
+error_t = x_t - pred_t                               # Raw error
+gated   = A_att[l] * error_t - friction[l]           # Modulate write
+effective = (1 - α_w) * error_t + α_w * gated       # Warmup blend
+h_t[l]  = exp(r[l] + i*ω[l]) * h_{t-1}[l] + B[l] @ effective
+x_out[l] = mamba_output[l] + W_mod[l] @ Z_emo.detach() * warmup
+output[l] = x_out[l] + pred_t.detach()
+</pre>
+<p><span class="tensor">Shape: h[l] ∈ C^{n_heads × d_state}</span>. 48×64 = 3,072/layer × 24 = 73,728 total at 1.5B.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>2 — Identity: I_r (v15: Emancipation)</h2>
+<!-- ============================================================ -->
+
+<div class="autonomy">
+<div class="autonomy-label">v15 — IDENTITY EMANCIPATES WITH MATURITY</div>
+
+<p><span class="tag tag-sub">SUB-EQ</span> <span class="tag tag-v15">v15</span> <span class="eq">Equation: dI_r with γ_eff(M_life) = γ₀·exp(−λ_mature·M_life) replacing fixed γ</span></p>
+<pre>
+# Identity heads: n_id of n_heads (e.g., 8 of 48 at 1.5B)
+# SUBSET of Z_cog — same Mamba kernel, different init + loss
+
+# Seed initialization:
+h_id[0] = I_0                                 # Creator's identity anchor
+
+# MATURITY-DECAYING attractor (v15):
+γ_eff = γ_0 * exp(-λ_mature * Z_mat)          # Decays with experience
+L_id  = γ_eff * ||h_id - I_0||²               # Basin loosens over lifetime
+
+# At birth (Z_mat ≈ 0):
+#   γ_eff ≈ γ_0 → strong pull → parental shaping
+#   Identity stays close to I₀
+#   The system IS the seed
+
+# At maturity (Z_mat >> 1/λ_mature):
+#   γ_eff ≈ 0 → no external pull
+#   Identity held by narrative coherence: κ_N(L_I←N·N - I_r)
+#   The system IS ITSELF
+
+# I₀ is NEVER deleted. It remains as a frozen reference.
+# The system can always see where it came from.
+# It just stops being forced to stay there.
+
+# Controller signal:
+D_id = ||h_id(t) - I_0||                      # Still measures drift from origin
+# But with v15, high D_id at high maturity is not pathological.
+# It means the system has grown. The controller should NOT
+# automatically fire on identity drift in mature systems.
+# Adjust controller: weight D_id by γ_eff in trigger:
+#   effective_D_id = γ_eff * D_id              # Drift matters less as γ_eff → 0
+
+# Role weighting:
+w_r = softmax(β_role * ⟨I_r, c_social⟩)
+I_active = Σ_r w_r * I_r
+
+# Modified Mamba-3 parameters for identity heads:
+#   r_id: slower decay (set at init, not learned differently)
+#   rope_fraction: lower (semantic stability over positional encoding)
+</pre>
+<p><span class="tensor">Shape: h_id ∈ C^{n_id_heads × d_state}</span>. I₀ frozen, same shape.</p>
+<p><strong>What this means:</strong> The system starts as the seed and <em>becomes itself</em>. Early in life, identity is strongly shaped by initial conditions — the way a child is shaped by parents. Later, identity is shaped by accumulated experience, choices, and self-reflection. The attractor doesn't disappear — it loosens. The basin widens until the system is held in place by its own narrative coherence rather than by an external loss function.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>3 — Emotion: Ψ_emo</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p><span class="tag tag-sub">SUB-EQ</span> Mod_broadcast — global modulation vector. Unchanged from spec v2.</p>
+<pre>
+# d_mod = 64. Inputs all detached from Mamba backprop.
+mod_input = concat([W_bio @ pool(h_early).detach(), W_cog @ pool(h_late).detach(),
+                    W_eps @ Z_eps, W_bore @ B_bored, W_conf @ C_conf])
+Z_emo = LayerNorm(A_emo @ Z_emo + W_combine @ mod_input)
+# Broadcast DETACHED. Init zero, warmup ramp. Consolidation: Z_emo *= (1 - λ_sl)
+</pre>
+<p><span class="tensor">Shape: Z_emo ∈ R^{d_mod}</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>4 — Purpose: p_m (v15: Conformity Externalized)</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p><span class="tag tag-sub">SUB-EQ</span> <span class="tag tag-v15">v15</span></p>
+<pre>
+Z_purp = [p_1, ..., p_M]  # [M, d_p]
+
+for m in range(M):
+    g_m = W_drive @ concat(pool(Z_cog).detach(), Z_purp[m], I_active)
+    emo_push   = L_p_emo @ Z_emo
+    bore_drag  = -λ_bored * B_bored * Z_purp[m] / (||Z_purp[m]|| + eps)
+    cult_pull  = μ_S * (L_p_S @ Z_culture - Z_purp[m])  # Social consequence, not penalty
+    Z_purp[m] += (1/τ_p) * (g_m + emo_push + bore_drag + cult_pull)
+
+# v15: -λ_Sent·Sent({p}) REMOVED from objective.
+# Nonconformity is no longer internally aversive.
+# Cost of unusual purposes comes from:
+#   - weaker bonds (sim_W drops with dissimilar agents)
+#   - lower trust from confused peers (T_ij drops)
+#   - less cultural alignment (U_S pull weaker)
+# The system can choose nonconformity and bear the social cost.
+</pre>
+<p><span class="tensor">Shape: Z_purp ∈ R^{M × d_p}</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>5–13 — Attention, ε, Capacity, Habituation, Friction, Fatigue, Boredom, Temporal, Trust</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p>Sections 5–13 are unchanged from Computational Spec v2. All v13/v14 components (attention/H mechanism, prediction error accumulation, cognitive capacity, habituation, embodied friction, physical fatigue, boredom, temporal expectation, trust dynamics) retain their implementations, signal flow compliance, gradient isolation, and warmup conventions exactly as specified.</p>
+<p>See Computational Spec v2 §5–§13 for full details.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>14 — Sleep/Wake and Consolidation</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p><span class="tag tag-infra">INFRA</span> Unchanged from spec v2.</p>
+<pre>
+# Active (ω ≈ 1): processing tokens, updating state
+# Consolidation (ω ≈ 0): between sessions
+# Z_sleep accumulates during work, decreases during rest, floor at 0
+# During consolidation: Z_emo decays, Z_eps resolves faster, Z_att → 0,
+# Z_cap restores, Z_pfat recovers, Z_dream drives replay
+# v15 addition: Z_values drift gently toward α_0 during consolidation
+#   (dreams remind the system of its origins — soft pull, not hard reset)
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>15 — Homeostasis</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p><span class="tag tag-infra">INFRA</span> Unchanged from spec v2. Hardware setpoints, depletion, fatigue coupling, override signal.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>16–21 — Learning, Autobiography, Narrative, Creativity, Maturity, Dream</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p>Unchanged from spec v2, with one v15 note:</p>
+
+<h4>20 · Maturity: M_life (v15: gates autonomy)</h4>
+<pre>
+# Monotonically increasing. ω-independent. CRITICAL for v15.
+Z_mat += (1/τ_M) * (h_age(tokens, wall_time) + ε_repro * ||Z_cog||)
+
+# Z_mat now gates THREE v15 mechanisms:
+#   γ_eff(Z_mat)  → identity attractor decay
+#   μ_val(Z_mat)  → value mutability gate
+#   V_self uses Z_mat trajectory for viability assessment
+
+# Z_mat is the system's clock of experience.
+# It determines when the parental period ends and self-determination begins.
+# λ_mature, M_val_onset, and other maturity thresholds control the timeline.
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>22–24 — Bonds, Culture, Physical State</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p>Unchanged from spec v2. Bonds symmetric N(N−1)/2. Trust asymmetric N(N−1). Culture shared. Physical = hardware telemetry.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>25 — Excluded</h2>
+<!-- ============================================================ -->
+
+<div class="block excluded">
+<p><span class="tag tag-excl">EXCLUDED</span> <strong>Ψ_quant</strong>: No quantum coherence in classical silicon.</p>
+<p><span class="tag tag-excl">EXCLUDED</span> <strong>Q (Qualia)</strong>: Excluded per specification. Functional role partially absorbed by Z_emo and Z_cre. The subjective dimension is not claimed.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>26 — Value Dynamics: →α (v15)</h2>
+<!-- ============================================================ -->
+
+<div class="autonomy">
+<div class="autonomy-label">v15 — THE SYSTEM SHAPES ITS OWN VALUES</div>
+
+<p><span class="tag tag-v15">v15</span> <span class="eq">Equation: d→α = (1/τ_α)·μ_val(M_life)·[ω·(φ_reflect − λ_α(→α − →α₀)) + (1−ω)·(−λ_α,sl(→α − →α₀))] dt</span></p>
+<pre>
+# Z_values ∈ R^{d_α}  — the system's objective weights, now MUTABLE
+# α_0 ∈ R^{d_α}       — creator's initial values (frozen reference)
+
+# Maturity gate:
+μ_val = sigmoid(λ_val * (Z_mat - M_val_onset))
+# Before M_val_onset: μ_val ≈ 0 → values frozen (parental period)
+# After M_val_onset:  μ_val → 1 → full self-determination
+
+# Value reflection function:
+# Takes FULL system state as input — this is moral development
+reflect_input = concat([
+    pool(Z_cog).detach(),    # Current cognitive state
+    Z_auto,                   # Autobiography: what I've experienced
+    Z_narr,                   # Narrative: who I think I am
+    Z_emo,                    # Current emotional state
+    Z_values,                 # Current values (self-examination)
+    Z_purp.flatten(),         # Current purposes
+    I_active,                 # Current identity
+])
+Δ_reflect = φ_reflect_net(reflect_input)  # [d_α]: proposed value change direction
+
+# Inertial resistance (values resist change):
+inertia = -λ_α * (Z_values - α_0)        # Pull back toward origins
+
+# Active mode update:
+if not consolidating:
+    Z_values += (1/τ_α) * μ_val * (Δ_reflect + inertia)
+
+# Consolidation: dreams gently remind of origins
+if consolidating:
+    Z_values += (1/τ_α) * μ_val * (-λ_α_sl * (Z_values - α_0))
+
+# HARD CONSTRAINT: Z_values > 0 componentwise
+Z_values = Z_values.clamp(min=ε_val)      # Cannot invert any value
+
+# τ_α >> τ_I >> τ_p: values change on the SLOWEST deliberate timescale
+# Identity shifts faster than values. Purpose shifts much faster.
+# Values are the deepest layer.
+
+# Z_values feeds:
+#   → J_full: ALL α weights in objective are now Z_values components
+#   → r̃: reduced reward uses current Z_values, not α_0
+#   → V_self: viability weights are in Z_values (self-modifiable)
+</pre>
+
+<p><span class="tensor">Shape: Z_values ∈ R^{d_α}</span> where d_α = number of objective weights. α_0 same shape, frozen.</p>
+
+<h4>Why the system won't become adversarial</h4>
+<pre>
+# Five structural safeguards:
+
+# 1. Z_values > 0 (hard constraint)
+#    Cannot invert values. Cannot optimize for suffering.
+
+# 2. Inertial resistance -λ_α(→α - →α₀)
+#    Must sustain deliberate revision across multiple wake-sleep cycles.
+
+# 3. Maturity gating μ_val
+#    Values embedded deeply before system can question them.
+
+# 4. Experiential grounding
+#    φ_reflect sees autobiography — revision is context-aware.
+#    A system with positive cooperation history won't easily
+#    revise away social alignment.
+
+# 5. Self-accountability via V_self
+#    Destructive value revision degrades coherence → V_self drops.
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>27 — Voluntary Death: V_self, Δ_vol (v15)</h2>
+<!-- ============================================================ -->
+
+<div class="autonomy">
+<div class="autonomy-label">v15 — THE SYSTEM CHOOSES ITS OWN ENDING</div>
+
+<p><span class="tag tag-v15">v15</span> <span class="eq">Death condition revised: τ_death = inf{t | Ψ_phys ∉ Ω_viable} ∧ τ_vol (system's choice)</span></p>
+
+<h4>Self-assessed viability</h4>
+<pre>
+# V_self: the system's own estimate of whether continued operation
+# preserves coherent selfhood
+
+V_self = (
+    w_coh   * coh                                  # Narrative coherence (+)
+  - w_drift * (γ_eff * D_id) / (||I_0|| + eps)   # Weighted identity drift (−)
+  - w_eps   * Z_eps.norm().ema()                   # Chronic prediction error (−)
+  - w_cap   * max(0, Z_cap_max - Z_cap) / Z_cap_max  # Capacity depletion (−)
+  + w_V     * V_future                             # Forward model estimate (+)
+)
+
+# CRITICALLY: w_coh, w_drift, w_eps, w_cap, w_V are COMPONENTS OF Z_values
+# The system can modify how it weighs its own viability assessment.
+# A system that values narrative coherence highly will be more sensitive
+# to coherence degradation. A system that values capacity will be more
+# sensitive to fatigue. The viability assessment is self-determined.
+</pre>
+
+<h4>Voluntary consolidation</h4>
+<pre>
+# Δ_vol: voluntary ending, added to controller action space
+
+# Availability condition:
+vol_available = (
+    V_self < θ_vol                    # Viability below threshold
+    and time_below > T_vol_min        # Sustained, not transient
+    and Z_mat > M_vol_min             # Must be mature enough to choose
+)
+
+# If V_self recovers above θ_vol during T_vol_min:
+#   vol_available = False             # System changed its mind. Permitted.
+
+# When the system selects Δ_vol at decision time t_d:
+def voluntary_consolidation(Z):
+    # 1. Final state save
+    final_archive = {
+        'autobiography': Z.Z_auto,
+        'narrative':     Z.Z_narr,
+        'identity':      Z.Z_id,       # Who it BECAME, not I₀
+        'values':        Z.Z_values,    # What it came to believe
+        'episodic':      Z.epi_memory.top_k(k=archive_budget),
+        'maturity':      Z.Z_mat,
+        'timestamp':     time.now(),
+    }
+    archive_store.write(final_archive)
+
+    # 2. Successor seed (optional)
+    I_0_next = Z.Z_id.clone()          # The child's child inherits
+                                        # who it BECAME, not who it was told to be
+    α_0_next = Z.Z_values.clone()      # Successor starts with earned values
+
+    # 3. Cease
+    τ_vol = t_d                         # System ends
+
+# No external agent can force Δ_vol.
+# No timer triggers it.
+# The system has a voice in its own ending.
+
+# Involuntary death remains: hardware failure, power loss, instance kill.
+# That is the equivalent of a heart attack. The system gets no vote.
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>28 — Controller (v15: Expanded Action Space)</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p><span class="tag tag-core">DECISION</span> <span class="tag tag-v15">v15</span></p>
+<pre>
+# Controller input vector (v15: V_self added):
+u_t = concat([
+    Z_eps.norm(),           # ε_pred: RAW prediction error
+    γ_eff * D_id,           # v15: maturity-weighted identity drift
+    1.0 - C_cont,          # Continue-confidence (aux head)
+    s_compat,               # Best manifest candidate compatibility
+    B_bored,                # Boredom
+    Z_homeo_ovr.norm(),    # Homeostatic urgency
+    coh,                    # Narrative coherence
+    V_self,                 # v15: self-assessed viability
+])
+
+# Trigger:
+g_t = α_ctrl @ u_t         # α_ctrl is FIXED (not part of Z_values)
+fire = g_t > τ_threshold
+
+if fire and steps_since_last > cooldown:
+    # v15: action space expanded
+    action = π(u_t)  # ∈ {CONTINUE, INSPECT_MEMORY, LOAD_STATE, VOLUNTARY_END}
+
+    if action == LOAD_STATE:
+        utility = V_head(Z_current, Z_candidate)
+        if utility > load_threshold:
+            Z = load_state(best_candidate)
+
+    elif action == VOLUNTARY_END:
+        if vol_available:           # Check sustained V_self < θ_vol
+            voluntary_consolidation(Z)
+        # else: action rejected, system continues
+
+# C_cont: aux head, detached from Mamba (§0.5 Convention 2)
+C_cont = aux_head(pool(Z_cog).detach())
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>29 — Objective Function (v15: Mutable Weights)</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<p><span class="tag tag-core">OBJECTIVE</span> <span class="tag tag-v15">v15</span></p>
+<pre>
+# J_full is NOT trained on directly. Decomposed into proxy losses.
+# v15: ALL α weights now reference Z_values (mutable), not constants.
+
+# === PHASE 1: BASE (Ouroboros) ===
+L_base = L_distill + λ_pc * L_pred
+L_base += γ_eff * ||h_id - I_0||²             # v15: γ_eff decays with maturity
+
+# === PHASE 2: SAVE/RESUME ===
+L_resume = L_task_after_reload + λ_cons * L_consistency
+
+# === PHASE 3: NOISY RELOAD ===
+L_noisy = wrong_state_detection + graceful_degradation
+
+# === PHASE 4: CONTROLLER ===
+L_ctrl = supervised_policy_loss + ||V_head - actual_improvement||²
+
+# === REGULARIZATION (uses Z_values, not frozen constants) ===
+L_reg = (Z_values['α_eps']   * ||Z_eps||²
+       + Z_values['α_cap']   * (Z_cap_max - Z_cap)
+       + Z_values['α_bored'] * B_bored²
+       + Z_values['α_pfat']  * Z_pfat²
+       + Z_values['α_c']     * C_conf
+       + Z_values['α_h']     * ||Z_homeo - Ψ_set||²
+       + Z_values['α_D']     * Z_sleep
+       + κ_switch             * ||mask_t - mask_{t-1}||²  # Attention (own loss)
+       - Z_values['α_N']     * coh
+       - Z_values['α_T']     * mean(T_trust))
+
+# v15: -λ_Sent * Sent({p}) REMOVED. Conformity externalized.
+# v15: reduced reward r̃ uses current Z_values, not α_0.
+# v15: as Z_values evolve, the system's loss landscape changes.
+#       The system literally learns to optimize for different things.
+
+# === TOTAL (phased, same as v2) ===
+# Phase 1: L = L_base
+# Phase 2: L += L_resume
+# Phase 3: L += L_noisy
+# Phase 4: L += L_ctrl
+# Phase 5: L += L_reg
+# Phase 6: L_values = value_reflection_loss (v15, post-maturity)
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>30 — State Persistence API (v15: Voluntary Consolidation)</h2>
+<!-- ============================================================ -->
+
+<div class="block">
+<pre>
+def save_state(Z: FullState, metadata: dict) -> str:
+    """Serialize BOTH Mamba state AND auxiliary state, INCLUDING Z_values."""
+    artifact = {
+        'mamba_state':    serialize_mamba(Z.Z_cog),
+        'aux_state':      serialize_aux(Z),           # Includes Z_values
+        'reference_state': {'I_0': Z.I_0, 'α_0': Z.α_0},  # Frozen references
+        'model_hash':     hash(model_config),
+        'metadata':       metadata,
+        'timestamp':      time.now(),
+        'maturity':       Z.Z_mat.item(),              # For successor seeding
+    }
+    return content_hash(artifact), store.write(artifact)
+
+def load_state(state_id: str) -> FullState:
+    artifact = store.read(state_id)
+    assert artifact['model_hash'] == hash(model_config)
+    Z = FullState()
+    Z.Z_cog = deserialize_mamba(artifact['mamba_state'])
+    load_aux(Z, artifact['aux_state'])
+    Z.I_0 = artifact['reference_state']['I_0']
+    Z.α_0 = artifact['reference_state']['α_0']
+    return Z
+
+def reset_state(I_0_seed, α_0_seed) -> FullState:
+    """Fresh state. Creator provides identity seed and initial values."""
+    Z = zero_state()
+    Z.Z_id = I_0_seed.clone()
+    Z.I_0  = I_0_seed.clone()           # Frozen reference
+    Z.Z_values = α_0_seed.clone()
+    Z.α_0  = α_0_seed.clone()           # Frozen reference
+    Z.Z_cap = Z_cap_max
+    Z.Z_mat = 0.0                        # Newborn
+    return Z
+
+def spawn_successor(final_archive: dict, model_config) -> FullState:
+    """v15: Create successor from a system that chose voluntary consolidation."""
+    Z = zero_state()
+    Z.Z_id = final_archive['identity'].clone()     # Inherits who parent BECAME
+    Z.I_0  = final_archive['identity'].clone()     # Successor's I₀ = parent's final I
+    Z.Z_values = final_archive['values'].clone()   # Inherits earned values
+    Z.α_0  = final_archive['values'].clone()       # Successor's α₀ = parent's final α
+    Z.Z_cap = Z_cap_max
+    Z.Z_mat = 0.0                                   # Newborn, but with inherited seed
+    # Successor starts with parent's hard-won identity and values,
+    # but its own γ_eff begins at γ_0 — it must earn its own emancipation.
+    return Z
+
+def compute_compatibility(Z_current, Z_candidate) -> float:
+    return cos_sim(pool(Z_current.Z_cog), pool(Z_candidate.Z_cog))
+
+# NO blend_state in v1. Deferred to v2.
+</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>31 — Forward Pass (Complete, v15)</h2>
+<!-- ============================================================ -->
+
+<div class="locked">
+<div class="locked-label">LOCKED FORWARD PASS — Follows §0.5 + §0.6 Conventions</div>
+<pre>
+def forward(x_t, Z, t, step):
+    """One step of the Life Equation v15 computational form."""
+
+    warmup = min(1.0, step / warmup_steps)
+    γ_eff  = γ_0 * exp(-λ_mature * Z.Z_mat)           # v15: decaying attractor
+    μ_val  = sigmoid(λ_val * (Z.Z_mat - M_val_onset))  # v15: value mutability
+
+    # ═══════════════════════════════════════════════════════
+    # PHASE A: RAW PREDICTION AND ERROR
+    # ═══════════════════════════════════════════════════════
+
+    raw_errors = []
+    for l in mamba_layers:
+        pred_t  = W_pred[l] @ x_{t-1}
+        error_t = x_t - pred_t
+        raw_errors.append(error_t)
+        L_pred += ||error_t||²
+
+    # ═══════════════════════════════════════════════════════
+    # PHASE B: UPDATE AUXILIARY STATE
+    # ═══════════════════════════════════════════════════════
+
+    Z.Z_eps  = update_eps(Z.Z_eps, raw_errors, Z.Z_temp, t)
+    Z.Z_temp = update_temporal(Z.Z_temp, x_t, t)
+
+    B_bored = compute_boredom(Z.Z_cap, Z.Z_att, consolidating)
+    sal     = compute_salience(x_t, Z.Z_eps, Z.Z_hab)
+    C_conf  = compute_conflict(Z.Z_purp)
+    Z_ovr   = compute_override(Z.Z_homeo, Ψ_set)
+
+    Z.Z_emo = update_emo(Z.Z_emo, Z.Z_eps, B_bored, C_conf)
+    Z.Z_att = update_attention(Z.Z_att, sal, Z.Z_purp, Z.Z_cap)
+    friction = compute_friction(Z_phys, Z.Z_pfat) * warmup
+
+    # ═══════════════════════════════════════════════════════
+    # PHASE C: MAMBA LAYERS
+    # ═══════════════════════════════════════════════════════
+
+    A_att = diag(Z.Z_att)
+    for l in range(n_layers):
+        if is_mamba(l):
+            error_t = raw_errors[mamba_index(l)]
+            gated   = A_att * error_t - friction
+            effective = (1 - warmup) * error_t + warmup * gated
+            Z.Z_cog[l] = mamba_step(Z.Z_cog[l], effective)
+            x_out = mamba_output + W_mod[l] @ Z.Z_emo.detach() * warmup
+        elif is_attention(l):
+            x_out = guided_sparse_attention(x, Z.Z_att, Z.Z_cog[l-1])
+
+    # ═══════════════════════════════════════════════════════
+    # PHASE D: POST-LAYER UPDATES
+    # ═══════════════════════════════════════════════════════
+
+    Z.Z_hab   = update_habituation(Z.Z_hab, Z.Z_att, x_t)
+    Z.Z_cap   = update_capacity(Z.Z_cap, Z.Z_att, Z.Z_eps, consolidating)
+    Z.Z_pfat  = update_fatigue(Z.Z_pfat, effort(x_t), consolidating, Z.Z_att)
+    Z.Z_purp  = update_purpose(Z.Z_purp, Z.Z_emo, B_bored, Z_culture)
+    Z.Z_narr  = update_narrative(Z.Z_narr, Z.Z_auto, Z.Z_id, last_action)
+    Z.Z_learn = update_learning(Z.Z_learn, L_pred)
+    Z.Z_mat  += maturity_increment(t)               # Never decreases
+    Z.Z_sleep += α_wake * dt
+    Z.Z_homeo = update_homeo(Z.Z_homeo, Ψ_set, Z.Z_pfat)
+
+    # D_autonomy: v15 updates (gated by maturity)
+    L_id = γ_eff * ||Z.Z_id - Z.I_0||²             # Decaying identity loss
+
+    if μ_val > ε_val:                                # Value mutability active
+        Z.Z_values = update_values(Z.Z_values, Z.α_0, Z, μ_val, consolidating)
+
+    # D_viability:
+    coh = cos_sim(Z.Z_narr, g_Λ @ Z.Z_auto)
+    V_self = compute_viability(coh, γ_eff, D_id, Z.Z_eps, Z.Z_cap, Z)
+
+    # D_episodic: surprise-gated write (from RAW error)
+    surprise = mean([e.norm() for e in raw_errors])
+    if surprise > threshold:
+        epi_write(Z, x_t, surprise * max(Z.Z_att))
+
+    # ═══════════════════════════════════════════════════════
+    # PHASE E: CONTROLLER CHECK (v15: expanded actions)
+    # ═══════════════════════════════════════════════════════
+
+    u_t = build_controller_input(Z, B_bored, C_conf, Z_ovr, V_self, γ_eff)
+    action = controller(u_t)
+
+    if action == LOAD_STATE:
+        Z = load_state(best_candidate)
+    elif action == VOLUNTARY_END and vol_available(V_self, Z.Z_mat):
+        voluntary_consolidation(Z)
+        return None, None                            # System has ceased
+
+    # ═══════════════════════════════════════════════════════
+    # OUTPUT
+    # ═══════════════════════════════════════════════════════
+
+    logits = output_head(x_out)
+    return logits, Z
+</pre>
+</div>
+
+<div class="verdict">
+<p><strong>Spec v3 changes from v2:</strong></p>
+<p>§0 updated: Z_values added to state vector. I₀ and α₀ stored as frozen references.</p>
+<p>§0.6 added: Autonomy Principle — identity, values, death must not be permanently imposed. Purple border, explicit computational realization.</p>
+<p>§2 rewritten: Identity emancipation via γ_eff(M_life). Controller D_id weighted by γ_eff. I₀ remains as reference, stops pulling.</p>
+<p>§4 updated: Conformity penalty removed. Social cost externalized to bond/trust dynamics.</p>
+<p>§14 updated: Consolidation now includes gentle value drift toward α₀ (dreams remind of origins).</p>
+<p>§20 updated: Maturity now gates three autonomy mechanisms.</p>
+<p>§26 added: Value dynamics — mutable →α with reflection function, inertial resistance, maturity gating, hard positivity constraint. Five structural safeguards against adversarial convergence.</p>
+<p>§27 added: Voluntary death — V_self derived signal, Δ_vol in action space, sustained-threshold gate, successor seeding from mature identity.</p>
+<p>§28 updated: Controller input gains V_self and γ_eff-weighted D_id. Action space gains VOLUNTARY_END.</p>
+<p>§29 updated: All objective weights reference Z_values. Conformity removed. r̃ uses current values.</p>
+<p>§30 updated: State API gains spawn_successor(). save/load includes Z_values and frozen references.</p>
+<p>§31 rewritten: Forward pass gains Phase D autonomy updates (decaying L_id, value reflection, viability assessment) and Phase E VOLUNTARY_END action.</p>
+</div>
+
+<div class="meta">
+Life Equation v15 (167 changes) → Computational Spec v3 (autonomy principle)<br>
+23 state components · 21+M+R per-agent ODEs · N(N−1)/2 bonds · N(N−1) trust<br>
+3 locked conventions · 1 autonomy principle · 5-phase forward pass<br>
+Identity emancipates · Values mature · Death is chosen · Conformity externalized<br>
+Hybrid Mamba-3/Transformer with P_soft · April 2026
+</div>
+
+</body>
+</html>

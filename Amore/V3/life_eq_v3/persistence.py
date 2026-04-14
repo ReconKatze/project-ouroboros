@@ -58,9 +58,12 @@ class StateStore:
         target.epi_vals = source.epi_vals
         target.manifest = source.manifest
         target.I_0 = source.I_0
+        target.Z_values = source.Z_values
+        target.alpha_0 = source.alpha_0
         target.last_attention_mask = source.last_attention_mask
         target.steps_since_last_action = source.steps_since_last_action
         target.epi_index = source.epi_index
+        target.Z_mat_age = source.Z_mat_age
 
     def save_state(self, state: FullState, metadata: Optional[Dict[str, object]] = None) -> str:
         """Serialize BOTH Mamba state AND auxiliary state, INCLUDING Z_values. §30 v15."""
@@ -107,7 +110,8 @@ class StateStore:
         loaded = zero_state(self.config, batch_size=artifact["aux_state"].Z_cog.shape[0], n_agents=artifact["aux_state"].T_trust.shape[0])
         loaded.Z_cog = self.deserialize_mamba(artifact["mamba_state"], loaded.Z_cog.device)
         self.load_aux(loaded, artifact["aux_state"])
-        # §30 v15: restore frozen references (Z_values restored via load_aux since it's in aux_state)
+        # §30 v15: restore frozen references (alpha_0 overwritten here to ensure reference_state
+        # takes precedence over the copy made during serialize_aux; Z_values is restored by load_aux)
         if "reference_state" in artifact:
             device = loaded.Z_cog.device
             loaded.I_0 = artifact["reference_state"]["I_0"].to(device)

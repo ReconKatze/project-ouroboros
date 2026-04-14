@@ -1,0 +1,33 @@
+from .config import LifeEquationConfig, VariantProfile
+from .factory import build_config, build_model
+from .variant_profiles import VARIANT_PROFILES, get_variant_profile
+
+__all__ = [
+    "LifeEquationConfig",
+    "VariantProfile",
+    "VARIANT_PROFILES",
+    "build_config",
+    "build_model",
+    "get_variant_profile",
+]
+
+try:
+    from .forensics import ForensicConfig, ForensicEventManager
+    from .model import LifeEquationModel
+    from .persistence import StateStore
+    from .state import FullState, ManifestEntry, zero_state
+
+    __all__.extend(
+        [
+            "ForensicConfig",
+            "ForensicEventManager",
+            "FullState",
+            "LifeEquationModel",
+            "ManifestEntry",
+            "StateStore",
+            "zero_state",
+        ]
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise

@@ -1,7 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Optional, Tuple
+
+
+@dataclass(frozen=True)
+class VariantProfile:
+    name: str
+    description: str
+    training_focus: Tuple[str, ...] = ()
+    controller_mode: str = "disabled"
+    enable_temporal: bool = True
+    enable_capacity: bool = True
+    enable_habituation: bool = True
+    enable_friction: bool = True
+    enable_fatigue: bool = True
+    enable_homeostasis: bool = True
+    enable_identity: bool = True
+    enable_emotion: bool = True
+    enable_purpose: bool = True
+    enable_attention_policy: bool = True
+    enable_memory_read: bool = True
+    enable_memory_write: bool = True
+    enable_memory_consolidation: bool = True
+    enable_social_relational: bool = True
+    enable_value_dynamics: bool = True
+    enable_viability: bool = True
+    enable_sde_regularizer: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,7 +131,11 @@ class LifeEquationConfig:
     d_alpha: int = 14             # 9 L_reg weights + 5 V_self weights
     gamma_0: float = 1.0          # Initial identity attractor strength
     lambda_mature: float = 0.1    # Decay rate: gamma_eff = gamma_0 * exp(-lambda_mature * Z_mat)
-    M_val_onset: float = 8.0      # Z_mat threshold where mu_val starts opening (~2000 lifetime steps)
+    M_val_onset: float = 100.0    # Z_mat threshold where mu_val starts opening.
+    # Original 8.0 (~H_1300 ≈ step 1300 in a 10K run) caused phi_reflect to activate
+    # mid-experiment with random weights, destabilizing att_gain → layer_input → L_trans cascade.
+    # 100.0 keeps value dynamics dormant for the full Ouroboros validation runs (Step 4).
+    # Set to 8.0 in full 9B Chimera training where multi-thousand-step lifetimes are expected.
     lambda_val: float = 1.0       # Sigmoid sharpness for mu_val
     tau_alpha: float = 100.0      # Value timescale (slowest deliberate layer)
     lambda_alpha: float = 0.01    # Inertial resistance: pulls Z_values back toward alpha_0
@@ -119,6 +148,7 @@ class LifeEquationConfig:
     # Without scaling, L_reg dominates gradients and drowns the distillation signal.
     lambda_reg: float = 0.01
     model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (28, 24, 48, 64, 14))
+    variant_profile: Optional[VariantProfile] = None
 
     @property
     def head_dim(self) -> int:

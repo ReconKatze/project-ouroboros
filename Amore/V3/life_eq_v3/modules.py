@@ -698,4 +698,7 @@ class ViabilityModule(nn.Module):
             - w_cap_v.unsqueeze(-1) * cap_depletion
             + w_V.unsqueeze(-1) * v_future
         )
-        return v_self, l_transition  # [B, 1], scalar
+        # Clamp V_self to a sane range — unbounded values (-100, etc.) from Z_values
+        # drifting to their max ceiling (w_eps_v=10 × eps_chronic=10 = -100) fed into
+        # the controller as extreme out-of-range signals before the onset fix.
+        return v_self.clamp(min=-10.0, max=10.0), l_transition  # [B, 1], scalar

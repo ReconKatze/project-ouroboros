@@ -10,10 +10,10 @@ Usage:
     python scripts/convert_and_test.py --model EleutherAI/pythia-160m
 
     # Step 2a (Qwen, CPU, FallbackMamba):
-    python scripts/convert_and_test.py --model Qwen/Qwen2.5-0.5B
+    python scripts/convert_and_test.py --model Qwen/Qwen2.5-Coder-0.5B
 
     # Step 2b (Qwen, CUDA, real Mamba — Colab):
-    python scripts/convert_and_test.py --model Qwen/Qwen2.5-0.5B --device cuda
+    python scripts/convert_and_test.py --model Qwen/Qwen2.5-Coder-0.5B --device cuda
 """
 
 import argparse

@@ -431,7 +431,17 @@ class LifeEquationModel(nn.Module):
                 if self.profile.lambda_identity is not None
                 else self.config.lambda_identity
             )
-            losses["L_id"] = lambda_id * self.identity_module.attractor_loss(state, gamma_eff)
+            # Gate L_id by has_seed — mirrors ViabilityModule's drift term gating.
+            # When I_0=zeros (not yet snapshotted), attractor_loss = gamma_eff * ||Z_id||²,
+            # pulling Z_id toward zero — the opposite of identity formation. cycle3_identity
+            # would be fighting its own loss: lambda_identity=0.3 pushing Z_id into shape
+            # while L_id pulls it back toward zero. Suppressing L_id until I_0 is seeded
+            # lets Z_id form freely under the Mamba training signal; --snapshot-identity
+            # then commits the formed identity as the anchor, after which L_id correctly
+            # penalises drift away from the established self.
+            i0_norm = state.I_0.norm()
+            has_seed = (i0_norm > 1e-3).float()
+            losses["L_id"] = has_seed * lambda_id * self.identity_module.attractor_loss(state, gamma_eff)
             d_id = self.identity_module.drift(state)
         else:
             losses["L_id"] = torch.tensor(0.0, device=x.device)

@@ -1,34 +1,40 @@
 """
 ThinkBridge — [THINK] token injection for hermes-agent.
 
-From dump1.txt:
-  "Your codex_memory notes: 'The minimal 9B test is think-before-responding
-   with hidden [THINK] tokens.'  Hermes-agent's agent/prompt_builder.py is
-   exactly where you'd inject this.  The prompt builder constructs the system
-   prompt before each API call — that's where you'd prepend [THINK] framing
-   and strip it from the final displayed response.  No model changes needed;
-   pure shell behavior."
+hermes-agent's agent/prompt_builder.py constructs the system prompt before every
+API call.  That is exactly where the [THINK] instruction is injected: as a suffix
+appended to the assembled system prompt.  No model changes needed; pure shell
+behaviour.
 
-What this does:
-  1. `wrap_messages(messages)` — adds a [THINK] framing turn before the
-     final user message so the model generates an inner monologue first.
-  2. `strip_think(response_text)` — removes everything inside [THINK]…[/THINK]
-     from the model's output before displaying it to the user.
+The response stripping (hiding inner monologue from the user) happens after the
+API call — in run_agent.py wherever the response text is displayed.
 
-Inner tokens are never shown to the user.  Training signal: response quality
-with vs. without the think pass.  Testable at 9B with no model changes.
+Two integration points, both minimal:
 
-Integration in hermes-agent:
-  In agent/prompt_builder.py, before calling the API:
-    from chimera.deployment.think_bridge import ThinkBridge
-    bridge = ThinkBridge(n_think_tokens=64)
-    messages = bridge.wrap_messages(messages)
+  1. In agent/prompt_builder.py — add [THINK] instruction to system prompt:
 
-  After receiving the response:
-    visible_text = bridge.strip_think(raw_response)
+       from chimera.deployment.think_bridge import ThinkBridge
+       _bridge = ThinkBridge(n_think_tokens=64)
 
-See inner_stream.md for the full architecture; this is the "minimal 9B test"
-version that requires no new infrastructure.
+       # At the end of build_system_prompt() (or wherever system_prompt is assembled):
+       system_prompt += _bridge.build_system_prompt_suffix()
+
+  2. In run_agent.py — strip before displaying to user:
+
+       from chimera.deployment.think_bridge import ThinkBridge
+       _bridge = ThinkBridge(n_think_tokens=64)
+
+       # After receiving response text:
+       visible_text = _bridge.strip_think(raw_response_text)
+
+       # Optional — to capture inner monologue for training signal:
+       inner, visible_text = _bridge.extract_think(raw_response_text)
+
+The complete wrap_messages() method is also provided for cases where you want
+stronger priming (forcing an assistant-prefix [THINK] turn in the messages list),
+but the system-prompt approach is simpler and requires no messages-list surgery.
+
+This is the "minimal 9B test" of think-before-responding from inner_stream.md.
 """
 
 from __future__ import annotations
@@ -48,19 +54,24 @@ _THINK_RE = re.compile(
 
 class ThinkBridge:
     """
-    Injects [THINK] framing into hermes-agent message sequences and strips
-    the inner monologue from the displayed response.
+    Injects [THINK] framing into hermes-agent and strips the inner monologue
+    from the displayed response.
+
+    Typical usage:
+      - build_system_prompt_suffix() → appended in agent/prompt_builder.py
+      - strip_think(response_text) → called in run_agent.py after API response
+      - extract_think(response_text) → optional training-signal capture
 
     Parameters
     ----------
     n_think_tokens : int
-        Rough target for the inner monologue length (passed as hint in the
-        system prompt injection; the model may produce more or less).
+        Rough target for the inner monologue length (hint in the instruction;
+        the model may produce more or less).
     think_instruction : str | None
-        Custom instruction prepended to the think block.  If None, uses the
-        default Chimera inner-stream instruction.
+        Custom instruction text.  If None, uses the default Chimera inner-stream
+        instruction.
     strip_from_display : bool
-        Whether to strip think blocks from the final displayed text.
+        Whether strip_think() removes think blocks from the displayed text.
         Set False during training/debugging to inspect the inner monologue.
     """
 
@@ -79,39 +90,31 @@ class ThinkBridge:
             "Your inner monologue will never be shown to the user."
         )
 
-    def wrap_messages(
-        self,
-        messages: List[Dict[str, str]],
-    ) -> List[Dict[str, str]]:
+    # ------------------------------------------------------------------ #
+    # Primary integration surface — system prompt injection               #
+    # Used in agent/prompt_builder.py                                     #
+    # ------------------------------------------------------------------ #
+
+    def build_system_prompt_suffix(self) -> str:
+        """Return the [THINK] instruction text to append to the system prompt.
+
+        Usage in agent/prompt_builder.py:
+            system_prompt += bridge.build_system_prompt_suffix()
+
+        The model will then open every response with a [THINK]...[/THINK] block
+        containing its inner monologue, followed by the visible response.
         """
-        Prepend [THINK] framing to the message sequence.
+        return "\n\n" + self._instruction
 
-        Strategy:
-          - If there is a system message, append the think instruction to it.
-          - Otherwise, inject a system message at position 0.
-          - Append a brief assistant prefix "[THINK]\n" to prime the model
-            to start its inner monologue immediately.
-
-        Returns a new list; the input is not modified.
-        """
-        result = list(messages)
-
-        # Inject instruction into system prompt
-        if result and result[0].get("role") == "system":
-            result[0] = dict(result[0])
-            result[0]["content"] = result[0]["content"].rstrip() + "\n\n" + self._instruction
-        else:
-            result.insert(0, {"role": "system", "content": self._instruction})
-
-        # Prime the assistant to begin with [THINK]
-        result.append({"role": "assistant", "content": f"{THINK_OPEN}\n"})
-
-        return result
+    # ------------------------------------------------------------------ #
+    # Response handling — called in run_agent.py after the API call       #
+    # ------------------------------------------------------------------ #
 
     def strip_think(self, response_text: str) -> str:
-        """
-        Remove all [THINK]...[/THINK] blocks from a model response.
+        """Remove all [THINK]...[/THINK] blocks from a model response.
+
         Returns the cleaned text for display to the user.
+        The inner monologue is silently discarded (use extract_think to keep it).
         """
         if not self.strip_from_display:
             return response_text
@@ -119,9 +122,10 @@ class ThinkBridge:
         return cleaned.strip()
 
     def extract_think(self, response_text: str) -> Tuple[str, str]:
-        """
-        Split a response into (inner_monologue, visible_text).
-        Useful for logging/training signal collection.
+        """Split a response into (inner_monologue, visible_text).
+
+        Useful for logging and training signal collection: inner_monologue
+        captures the model's reasoning; visible_text is what the user sees.
 
         Returns
         -------
@@ -131,7 +135,6 @@ class ThinkBridge:
             The response with all think blocks removed.
         """
         inner_parts = _THINK_RE.findall(response_text)
-        # Strip the THINK tags themselves from the captured blocks
         inner_clean = []
         for block in inner_parts:
             text = re.sub(r"^\[THINK\]\s*", "", block, flags=re.IGNORECASE)
@@ -141,3 +144,36 @@ class ThinkBridge:
         inner_monologue = "\n\n".join(inner_clean)
         visible_text = _THINK_RE.sub("", response_text).strip()
         return inner_monologue, visible_text
+
+    # ------------------------------------------------------------------ #
+    # Alternative — stronger priming via messages-list surgery            #
+    # Use this if system-prompt injection alone is insufficient.          #
+    # ------------------------------------------------------------------ #
+
+    def wrap_messages(
+        self,
+        messages: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        """Inject [THINK] framing directly into the messages list.
+
+        Adds the instruction to the system message AND appends a forced
+        assistant-prefix "[THINK]\\n" to guarantee the model opens with its
+        inner monologue.  More aggressive than build_system_prompt_suffix()
+        but requires touching the messages list rather than just the system
+        prompt string.
+
+        Returns a new list; the input is not modified.
+        """
+        result = list(messages)
+
+        # Append instruction to existing system message (or create one)
+        if result and result[0].get("role") == "system":
+            result[0] = dict(result[0])
+            result[0]["content"] = result[0]["content"].rstrip() + "\n\n" + self._instruction
+        else:
+            result.insert(0, {"role": "system", "content": self._instruction})
+
+        # Force-prime the assistant to begin with [THINK]
+        result.append({"role": "assistant", "content": f"{THINK_OPEN}\n"})
+
+        return result

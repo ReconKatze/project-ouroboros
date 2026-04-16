@@ -822,3 +822,207 @@ class SelfDynamicsModel(nn.Module):
         pred_next, h_next = self.step(summary_t.detach(), action_idx, h_prev.detach())
 
         return pred_next, h_next, l_self
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# §N  Narrative coherence                                                      #
+# ─────────────────────────────────────────────────────────────────────────── #
+
+class NarrativeModule(nn.Module):
+    """§N: Narrative coherence — running self-story and identity expectation.
+
+    Z_narr (d_narr) — running narrative: GRU integrating recent cognitive state.
+      Updated every step using late_pool (compressed Z_cog) as input.
+
+    Z_auto (d_auto = d_narr) — identity-grounded expectation: slow EMA toward
+      a projection of active_identity.  Answers "what should the narrative look
+      like if identity is stable?"
+
+    Coherence = cos_sim(Z_narr, Z_auto) — measures how well the lived narrative
+      aligns with identity expectations.  Feeds ViabilityModule (V_self), the
+      controller trigger, and L_reg (alpha_N * coherence).
+
+    During consolidation: Z_narr receives a gentle residual from DreamModule so
+      replayed episodic memories can integrate into the narrative during sleep.
+      Z_auto is not modified during consolidation — the identity reference holds.
+
+    Gradient isolation (§0.5 Convention 2): all inputs are detached.
+    """
+
+    def __init__(self, config: LifeEquationConfig):
+        super().__init__()
+        self.config = config
+        # Narrative GRU: integrates late_pool [B, d_state] → Z_narr [B, d_narr]
+        self.narr_gru = nn.GRUCell(config.d_state, config.d_narr)
+        # Auto-expectation: maps active_identity [B, d_state] → identity narrative [B, d_narr]
+        # Slow EMA (tau_auto) drives Z_auto toward this projection each step.
+        self.id_to_auto = nn.Linear(config.d_state, config.d_narr, bias=False)
+
+    def forward(
+        self,
+        z_narr: torch.Tensor,            # [B, d_narr]
+        z_auto: torch.Tensor,            # [B, d_auto]  (d_auto == d_narr)
+        late_pool: torch.Tensor,         # [B, d_state] — detached upstream
+        active_identity: torch.Tensor,   # [B, d_state] — detached upstream
+        dream_residual: Optional[torch.Tensor],  # [B, d_narr] or None
+        consolidating: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Narrative update via GRU (integrates recent cognitive history)
+        z_narr_new = self.narr_gru(late_pool.detach(), z_narr)
+        if consolidating and dream_residual is not None:
+            # Sleep: gentle nudge from dream replay into the narrative
+            z_narr_new = z_narr_new + 0.05 * dream_residual.detach()
+
+        # Auto-expectation: slow EMA toward identity-grounded narrative target
+        target = self.id_to_auto(active_identity.detach())              # [B, d_narr]
+        tau = getattr(self.config, "tau_auto", 64.0)
+        z_auto_new = z_auto + (target - z_auto[:, : self.config.d_narr]) / tau
+        # If d_auto > d_narr, preserve the trailing slice unchanged
+        if z_auto.shape[-1] > self.config.d_narr:
+            z_auto_new = torch.cat([z_auto_new, z_auto[:, self.config.d_narr:]], dim=-1)
+
+        return z_narr_new, z_auto_new
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# §D  Sleep pressure                                                           #
+# ─────────────────────────────────────────────────────────────────────────── #
+
+class SleepModule(nn.Module):
+    """§D: Activity-weighted sleep pressure accumulator.
+
+    Replaces the fixed-rate tick (±1/tau_sleep per step) with a learned
+    activity-dependent rate.  The accumulation speed is proportional to how
+    hard the system is working: high attention + high prediction error + high
+    fatigue → faster sleep pressure buildup.
+
+    Sleep pressure contributes to L_reg via alpha_D * Z_sleep, incentivising
+    the system toward consolidation when Z_sleep is elevated.  During
+    consolidation Z_sleep releases at a fixed rate (constant commitment length).
+
+    Gradient isolation: all inputs detached.
+    """
+
+    def __init__(self, config: LifeEquationConfig):
+        super().__init__()
+        self.config = config
+        # Map (att_activity, eps_norm, fatigue) → accumulation rate scalar ∈ [0, 1]
+        self.pressure_proj = nn.Linear(3, 1, bias=True)
+
+    def forward(
+        self,
+        z_sleep: torch.Tensor,   # [B, 1]
+        z_att: torch.Tensor,     # [B, d_att]
+        z_eps: torch.Tensor,     # [B, d_eps]
+        z_pfat: torch.Tensor,    # [B, 1]
+        consolidating: bool,
+    ) -> torch.Tensor:
+        if consolidating:
+            return (z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
+        # Activity triplet: each component normalised to [0, 1]
+        att  = z_att.abs().mean(dim=-1, keepdim=True).detach().clamp(max=5.0) / 5.0
+        eps  = z_eps.norm(dim=-1, keepdim=True).detach().clamp(max=10.0) / 10.0
+        pfat = z_pfat.detach().clamp(max=10.0) / 10.0
+        pressure = torch.sigmoid(self.pressure_proj(torch.cat([att, eps, pfat], dim=-1)))  # [B, 1]
+        return (z_sleep + pressure / self.config.tau_sleep).clamp(min=0.0, max=10.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# §θ  Dream dynamics                                                           #
+# ─────────────────────────────────────────────────────────────────────────── #
+
+class DreamModule(nn.Module):
+    """§θ: Episodic replay during consolidation — dream content.
+
+    Awake:         Z_dream slowly fades toward zero (waking cognition clears it).
+    Consolidating: stored episodic values are soft-averaged and compressed into
+                   Z_dream (a 'dream content' vector).  This represents the
+                   system integrating its autobiography during sleep.
+
+    Z_dream is then available as a narrative residual passed to NarrativeModule:
+    during consolidation, replayed memories gently nudge Z_narr so episodic
+    experience is woven into the ongoing self-story.
+
+    Gradient isolation: epi_vals are stored detached; dream_to_narr is the only
+    trained path and its output is used as a small residual (+0.05 weight).
+    """
+
+    def __init__(self, config: LifeEquationConfig):
+        super().__init__()
+        self.config = config
+        # Compress episodic value buffer mean → dream content [B, d_dream]
+        self.val_to_dream = nn.Linear(config.d_val, config.d_dream, bias=False)
+        # Project dream content → narrative residual [B, d_narr]
+        self.dream_to_narr = nn.Linear(config.d_dream, config.d_narr, bias=False)
+
+    def forward(
+        self,
+        z_dream: torch.Tensor,  # [B, d_dream]
+        state,                   # FullState (reads epi_vals, epi_index)
+        consolidating: bool,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Returns (z_dream_new [B, d_dream], narr_residual [B, d_narr] or None)."""
+        if not consolidating:
+            # Awake: dream state fades (τ_dream ≈ 128 steps)
+            return z_dream * (1.0 - 1.0 / 128.0), None
+
+        n_filled = min(state.epi_index, state.epi_keys.shape[0])
+        if n_filled == 0:
+            return z_dream, None
+
+        # Uniform replay: mean over all stored episodic values (no query — dreams browse broadly)
+        vals    = state.epi_vals[:n_filled].to(z_dream.device)          # [n_filled, d_val]
+        replay  = self.val_to_dream(vals.mean(dim=0, keepdim=True))     # [1, d_dream]
+        replay  = replay.expand(z_dream.shape[0], -1)                   # [B, d_dream]
+
+        # EMA toward replay content (τ = 16 consolidation steps)
+        z_dream_new   = z_dream + (replay.detach() - z_dream) / 16.0
+        narr_residual = self.dream_to_narr(z_dream_new.detach())         # [B, d_narr]
+        return z_dream_new, narr_residual
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# §T_ij  Trust dynamics                                                        #
+# ─────────────────────────────────────────────────────────────────────────── #
+
+class TrustModule(nn.Module):
+    """§T_ij / B_ij: Trust dynamics (single-agent: epistemic self-trust).
+
+    T_trust tracks how reliable and self-consistent the system's reasoning has
+    been.  It is a slow-moving signal: consistent low prediction error + stable
+    identity + coherent narrative → trust converges toward 1.  Fragmented state
+    → trust drifts toward 0.
+
+    T_trust feeds L_reg as: -alpha_T * T_trust.mean()
+    (higher trust → lower loss; the system is rewarded for being trustworthy).
+
+    Multi-agent extension: the full T_ij matrix update (per-pair directional
+    trust based on shared prediction error) is the next step and will be added
+    when multi-agent training begins.  For now W_bond stays as an identity matrix.
+
+    Gradient isolation: all inputs detached.
+    """
+
+    def __init__(self, config: LifeEquationConfig):
+        super().__init__()
+        self.config = config
+        # Map (eps_reliability, coherence, identity_stability) → trust target ∈ [0, 1]
+        self.trust_proj = nn.Linear(3, 1, bias=True)
+
+    def forward(
+        self,
+        t_trust: torch.Tensor,    # [n_agents, n_agents]  (single-agent: [1, 1])
+        z_eps: torch.Tensor,      # [B, d_eps]
+        coherence: torch.Tensor,  # [B, 1]
+        d_id: torch.Tensor,       # [B, 1]
+    ) -> torch.Tensor:
+        # Reliability inputs — normalised to [0, 1], all detached
+        eps_rel   = 1.0 - z_eps.norm(dim=-1, keepdim=True).detach().clamp(max=10.0) / 10.0  # [B,1]
+        coh_norm  = coherence.detach().clamp(-1.0, 1.0)                                       # [B,1]
+        id_stable = 1.0 - d_id.detach().clamp(max=5.0) / 5.0                                 # [B,1]
+
+        trust_input  = torch.cat([eps_rel, coh_norm, id_stable], dim=-1)           # [B, 3]
+        trust_target = torch.sigmoid(self.trust_proj(trust_input)).mean()           # scalar
+
+        tau = getattr(self.config, "tau_trust", 32.0)
+        return (t_trust + (trust_target - t_trust) / tau).clamp(0.0, 1.0)

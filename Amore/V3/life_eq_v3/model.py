@@ -11,6 +11,7 @@ from .modules import (
     AttentionModule,
     CapacityModule,
     ControllerModule,
+    DreamModule,
     EmotionModule,
     EpisodicMemoryModule,
     FatigueModule,
@@ -19,10 +20,13 @@ from .modules import (
     HomeostasisModule,
     IdentityModule,
     Mamba3Block,
+    NarrativeModule,
     PredictionErrorModule,
     PurposeModule,
     SelfDynamicsModel,
+    SleepModule,
     TemporalModule,
+    TrustModule,
     ValueDynamicsModule,
     ViabilityModule,
     warmup_alpha,
@@ -97,6 +101,12 @@ class LifeEquationModel(nn.Module):
         # Always instantiated (parameters are cheap: ~d_sdm² + 8*d_sdm).
         # Active only when profile.enable_self_dynamics=True.
         self.self_dynamics = SelfDynamicsModel(self.config)
+        # §N / §D,θ / §T_ij — the three NEXT TARGETs now implemented.
+        # Always instantiated; active only when the corresponding profile flag is True.
+        self.narrative_module = NarrativeModule(self.config)
+        self.sleep_module = SleepModule(self.config)
+        self.dream_module = DreamModule(self.config)
+        self.trust_module = TrustModule(self.config)
         self.store = StateStore(self.config, root_dir=state_store_dir)
 
     def _zeros(self, batch: int, width: int, device: torch.device) -> torch.Tensor:
@@ -368,16 +378,31 @@ class LifeEquationModel(nn.Module):
                 boredom,
                 culture,
             )
-        state.Z_narr = 0.9 * state.Z_narr + 0.1 * layer_input[:, : self.config.d_narr]
+        if self.profile.enable_sleep_dream:
+            state.Z_dream, _dream_residual = self.dream_module(state.Z_dream, state, effective_consolidating)
+        else:
+            _dream_residual = None
+        if self.profile.enable_narrative:
+            state.Z_narr, state.Z_auto = self.narrative_module(
+                state.Z_narr, state.Z_auto, late_pool, active_identity,
+                _dream_residual, effective_consolidating,
+            )
+        else:
+            state.Z_narr = 0.9 * state.Z_narr + 0.1 * layer_input[:, : self.config.d_narr]
         base_learning_signal = distill_loss if distill_loss is not None else pred_loss.detach() * self.config.lambda_pred
         learn_signal = base_learning_signal.view(1, 1).expand(batch, self.config.d_learn)
         state.Z_learn = 0.9 * state.Z_learn + 0.1 * learn_signal
         state.Z_mat = state.Z_mat + 1.0 / max(1, state.Z_mat_age + 1)
         state.Z_mat_age += 1
-        if effective_consolidating:
-            state.Z_sleep = (state.Z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
+        if self.profile.enable_sleep_dream:
+            state.Z_sleep = self.sleep_module(
+                state.Z_sleep, state.Z_att, state.Z_eps, state.Z_pfat, effective_consolidating
+            )
         else:
-            state.Z_sleep = (state.Z_sleep + 1.0 / self.config.tau_sleep).clamp(min=0.0, max=10.0)
+            if effective_consolidating:
+                state.Z_sleep = (state.Z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
+            else:
+                state.Z_sleep = (state.Z_sleep + 1.0 / self.config.tau_sleep).clamp(min=0.0, max=10.0)
         # Z_id: first n_id_heads Mamba layers' outputs as identity-relevant cognitive state.
         if self.profile.enable_identity:
             state.Z_id = state.Z_cog[:, : self.config.n_id_heads, :]
@@ -402,6 +427,9 @@ class LifeEquationModel(nn.Module):
         else:
             losses["L_id"] = torch.tensor(0.0, device=x.device)
             d_id = torch.zeros((batch, 1), device=x.device)
+        # §T_ij: trust update now that coherence and d_id are both available
+        if self.profile.enable_trust_dynamics:
+            state.T_trust = self.trust_module(state.T_trust, state.Z_eps, coherence, d_id)
         # pool_complex_state now returns [B, 2] via first-half/second-half of d_model
         if self.profile.enable_value_dynamics:
             state.Z_values = self.value_module(state, mu_val, active_identity, effective_consolidating, pool_complex_state(state.Z_cog).detach())

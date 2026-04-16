@@ -37,6 +37,15 @@ class VariantProfile:
     # When enabled: V_self is augmented pessimistically by the prev-step prediction,
     # making the controller and Δ_vol gate forward-looking rather than reactive.
     enable_self_dynamics: bool = False
+    # §N  NarrativeModule: GRU-based narrative + identity expectation (Z_narr, Z_auto).
+    # When disabled, the stub EMA (0.9*Z_narr + 0.1*layer_input) is used and Z_auto stays zeros.
+    enable_narrative: bool = False
+    # §D/θ  SleepModule + DreamModule: activity-weighted sleep pressure + consolidation replay.
+    # When disabled, the fixed-rate tick (±1/tau_sleep) and zero Z_dream are used.
+    enable_sleep_dream: bool = False
+    # §T_ij  TrustModule: epistemic self-trust dynamics from (Z_eps, coherence, D_id).
+    # When disabled, T_trust stays at trust_default (1.0) throughout the lifetime.
+    enable_trust_dynamics: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,8 @@ class LifeEquationConfig:
     tau_temp: float = 8.0
     tau_homeo: float = 32.0
     tau_sleep: float = 64.0
+    tau_auto: float = 64.0    # Z_auto EMA timescale toward identity-grounded narrative target
+    tau_trust: float = 32.0   # T_trust EMA timescale toward computed trust target
     lambda_eps: float = 0.1
     lambda_eps_sleep: float = 0.25
     lambda_rest: float = 0.2

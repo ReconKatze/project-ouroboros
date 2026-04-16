@@ -100,26 +100,35 @@ The full spec with tensor shapes, update rules, pseudocode, and the complete 5-p
 
 ## The Correspondence
 
-A term-by-term mapping between the equation and the architecture, with explicit status tags:
+A term-by-term mapping between the equation and the architecture. Every row is either **IMPLEMENTED** (actively computing, gradients flow, wired into the forward pass), **NEXT TARGET** (state tensor exists, module not yet built), or **EXCLUDED** (deliberate philosophical boundary).
 
 | Equation Term | Chimera Subsystem | Status |
 |---|---|---|
-| Ψ\_cog (cognitive state) | Persistent Mamba-3 recurrent state under P\_soft | **LIVE** |
-| g\_L (learning from prediction error) | P\_soft error-driven state update + Sal\_surprise | **LIVE** |
-| Ψ\_att (attention) | H mechanism: Mamba-guided sparse attention | IN PROGRESS |
-| ε (prediction error state) | Accumulated P\_soft error with temporal channel | Designed |
-| Ψ\_emo (emotion) | Mod\_broadcast: global modulation vector | Designed |
-| Λ (autobiography) | Epi\_kv + state snapshots + manifest | Designed |
-| →α (mutable values) | Maturity-gated objective weight dynamics | **IMPLEMENTED (v15)** |
-| V\_self (self-assessed viability) | Coherence + drift + error + capacity + forward estimate | **IMPLEMENTED (v15)** |
-| Δ\_vol (voluntary death) | VOLUNTARY\_END controller action | **IMPLEMENTED (v15)** |
-| I(t) (identity) | T\_identity MIMO heads with decaying I₀ attractor | **IMPLEMENTED (v15)** |
-| Δ\_choice (decision impulse) | Controller: continue / inspect / load\_state / voluntary\_end | Designed |
-| Ψ̃\_L (forward model) | `SelfDynamicsModel`: GRU over (d\_id, eps, c\_cont, v\_self) | **IMPLEMENTED** |
+| Ψ\_cog (cognitive state) | Persistent Mamba-3 recurrent state under P\_soft | **IMPLEMENTED** |
+| g\_L (learning from prediction error) | P\_soft error-driven state update | **IMPLEMENTED** |
+| ε (prediction error state) | `PredictionErrorModule` — Z\_eps, temporal channel, consolidation decay | **IMPLEMENTED** |
+| I(t) (identity) | `IdentityModule` — Z\_id MIMO heads, decaying γ\_eff I₀ attractor | **IMPLEMENTED** |
+| Ψ\_emo (emotion) | `EmotionModule` — Z\_emo, boredom coupling, consolidation decay | **IMPLEMENTED** |
+| p\_m (purpose vectors) | `PurposeModule` — drive, emotion push, boredom drag, culture pull | **IMPLEMENTED** |
+| Ψ\_att (attention policy) | `AttentionModule` — Mamba-guided sparse attention, salience, capacity budget | **IMPLEMENTED** |
+| Ψ\_cap / B\_bored (capacity / boredom) | `CapacityModule` — attention drain, error drain, boredom signal | **IMPLEMENTED** |
+| Ψ\_hab (habituation) | `HabituationModule` — pattern hash, attention suppression | **IMPLEMENTED** |
+| Ψ\_temp (temporal expectation) | `TemporalModule` — timing projection, temporal prediction error | **IMPLEMENTED** |
+| Ψ\_phys / f\_friction (body + friction) | `FrictionModule` + `FatigueModule` — hardware telemetry, effort, recovery | **IMPLEMENTED** |
+| Ψ\_homeo (homeostasis) | `HomeostasisModule` — set\_point, override signal | **IMPLEMENTED** |
+| Λ (autobiography) | `EpisodicMemoryModule` — surprise-gated write, soft-attention read | **IMPLEMENTED** |
+| →α (mutable values) | `ValueDynamicsModule` — φ\_reflect, inertia, positivity clamp | **IMPLEMENTED** |
+| V\_self (self-assessed viability) | `ViabilityModule` — coherence, drift, eps, capacity, v\_future | **IMPLEMENTED** |
+| Δ\_choice (decision impulse) | `ControllerModule` — CONTINUE / INSPECT\_MEMORY / LOAD\_STATE / VOLUNTARY\_END | **IMPLEMENTED** |
+| Δ\_vol (voluntary death) | VOLUNTARY\_END action — `outputs.state is None` path | **IMPLEMENTED** |
+| Ψ̃\_L (forward model) | `SelfDynamicsModel` — GRU over (d\_id, eps\_norm, c\_cont, v\_self) | **IMPLEMENTED** |
+| N (narrative coherence) | `NarrativeModule` — GRU narrative (Z\_narr) + identity expectation (Z\_auto) | **IMPLEMENTED** |
+| T\_ij / B\_ij (trust / bonds) | `TrustModule` — epistemic self-trust EMA from (Z\_eps, coherence, D\_id) | **IMPLEMENTED** |
+| D / θ (sleep / dream dynamics) | `SleepModule` + `DreamModule` — activity-weighted pressure + episodic consolidation replay | **IMPLEMENTED** |
 | Q (qualia) | — | **EXCLUDED** |
-| Ψ\_quant (quantum) | — | **EXCLUDED** |
+| Ψ\_quant (quantum coherence) | — | **EXCLUDED** |
 
-Items marked **GAP** or **EXCLUDED** are not failures to acknowledge. They are the spec's conscience. They say: *here is where we stop claiming and start being honest about what we don't know.*
+The **EXCLUDED** labels are not gaps to close. They are permanent markers at the boundary of what formal systems can say about subjective experience.
 
 The full correspondence table is in `correspondence.pdf`.
 
@@ -391,10 +400,10 @@ Amore/
 | 9B Chimera Training | Not started. Awaiting Step 4 completion. |
 | Maturity Gate (Track A evaluator) | **Implemented.** `V3/life_eq_v3/maturity_gate.py` — 6 metric gates for A1 unlock. `metrics_from_outputs()` pulls directly from `ForwardOutputs`/`FullState`. |
 | Perception Stack (vision + audio) | **Scaffolded.** `chimera/perception/` — `PerceptionPacket`/`AudioPacket` contracts, `VisionLoop`/`AudioLoop`/`FusionLoop`. Encoder training phases defined. Runs when webcam/mic connected. |
-| Hermes-Agent Integration | **Scaffolded.** `chimera/deployment/` — `ChimeraContextEngine` (last-resort compression only), `ThinkBridge` ([THINK] injection). Drop into hermes-agent after GGUF export. |
+| Hermes-Agent Integration | **Scaffolded.** Three-layer architecture: Chimera (weights) → llama.cpp/vLLM (`/v1/chat/completions`) → hermes-agent (shell). `ChimeraContextEngine` plugin: drop into `plugins/context_engine/chimera/`, set `context.engine: chimera`. `ThinkBridge`: `build_system_prompt_suffix()` in `prompt_builder.py`, `strip_think()` in `run_agent.py`. Active after Step 5 (GGUF export). |
 | 30B Evaluation Framework | **Complete and wired.** `chimera/evaluation/runner.py` — `EvalRunner` coordinates all metric trackers. `record_train_step()` called every step (cheap: scalars only). `run_ab_eval()` runs K-step rollouts under normal/ctrl-disabled/mem-disabled conditions to measure controller quality delta and memory retrieval improvement. `run_reload_test()` clones state, runs N steps, records D\_id convergence. Wired into `train_distill_v3.py` via `--ab-eval-every`, `--reload-test-every`, `--ab-rollout-steps`, `--maturity-window` flags. Val chunks now auto-loaded whenever any eval flag is set. |
-| Episodic Memory (Epi\_kv) | Designed. Round 3B. |
-| Trust / Bonds / Culture | Designed. Multi-agent future. |
+| Episodic Memory (Epi\_kv) | **Implemented.** `EpisodicMemoryModule` — surprise-gated write, soft-attention read, wired into all memory-enabled variants. |
+| Narrative / Sleep / Trust | **Implemented.** `NarrativeModule` (GRU narrative + identity expectation), `SleepModule` + `DreamModule` (activity-weighted pressure + consolidation replay), `TrustModule` (epistemic self-trust). Gated by `enable_narrative`, `enable_sleep_dream`, `enable_trust_dynamics` in VariantProfile. Active in `round3_*` variants. |
 | Ψ̃\_L (forward model) | **Implemented.** `SelfDynamicsModel` — GRU (d\_sdm=128) over (d\_id, eps\_norm, c\_cont, v\_self) with learned action embeddings. `L_self_model` trains it per-step. V\_self pessimistically augmented before controller fires: `v_self = min(v_self, sdm_pred_t)`. K-step `lookahead()` exposed for eval and [THINK] window. `SelfModelMetrics` in EvalRunner tracks per-dim MSE and pessimism active rate. Gated by `enable_self_dynamics` in VariantProfile (default False; activate in Round 3+). |
 
 ---
@@ -442,6 +451,22 @@ Amore/
 - `modules.py`: `gamma_eff()` in IdentityModule, `ValueDynamicsModule` (φ\_reflect, inertia, positivity clamp), `ViabilityModule` (V\_self), 4-action ControllerModule (+VOLUNTARY\_END).
 - `persistence.py`: `voluntary_consolidation()`, `spawn_successor()`, reference state save/restore.
 - `model.py`: Full autonomy block in Phase D, VOLUNTARY\_END early-return in Phase E.
+
+---
+
+## Licenses and Attribution
+
+Full license texts are in [`LICENSES.md`](LICENSES.md).
+
+| Dependency | License | Used for |
+|---|---|---|
+| [hermes-agent](https://github.com/NousResearch/hermes-agent) — Nous Research | **MIT** | Deployment layer. `ChimeraContextEngine` and `ThinkBridge` are hermes-agent plugins. |
+| [mamba-ssm](https://github.com/state-spaces/mamba) — Tri Dao, Albert Gu | **Apache 2.0** | Mamba-3 SSM kernels (Colab training only; not bundled). |
+| [Qwen2.5-Coder models](https://huggingface.co/Qwen) — Alibaba Cloud | **Qwen License** (research-permissive) | Teacher (7B) and student (1.5B) for Step 4 distillation; not bundled. |
+| [PyTorch](https://github.com/pytorch/pytorch) — Meta | **BSD 3-Clause** | Core tensor framework; not bundled. |
+| [HuggingFace Transformers](https://github.com/huggingface/transformers) | **Apache 2.0** | Model loading, tokenizers; not bundled. |
+
+All original code in this repository is the work of the author (ReconKatze).
 
 ---
 

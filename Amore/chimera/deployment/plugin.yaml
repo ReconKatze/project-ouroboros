@@ -1,0 +1,17 @@
+# hermes-agent plugin metadata for ChimeraContextEngine.
+# When deploying, copy both context_engine.py (as __init__.py) and this file to:
+#   hermes-agent/plugins/context_engine/chimera/
+#
+# Then set in hermes-agent config.yaml:
+#   context:
+#     engine: chimera
+
+name: chimera
+description: >
+  Context engine for Chimera (hybrid Mamba-3/Transformer).
+  Trusts the Mamba SSM to compress context into hidden state and fires
+  summarization only within hard_margin_tokens of the absolute context limit.
+  The default engine's 80% soft threshold is intentionally bypassed.
+version: "1.0"
+author: Project Amore (projectamore26@gmail.com)
+requires_hermes: ">=0.9.0"

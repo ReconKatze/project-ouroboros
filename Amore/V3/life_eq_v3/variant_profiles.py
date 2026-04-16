@@ -333,6 +333,34 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         enable_memory_consolidation=True,
         enable_social_relational=True,
     ),
+    # ── Round 3: narrative, sleep/dream, and trust dynamics ───────────────────
+    "round3_narrative_sleep_trust": _profile(
+        "round3_narrative_sleep_trust",
+        "Round 3: first run with NarrativeModule, SleepModule/DreamModule, and TrustModule active. "
+        "All three NEXT TARGET modules enabled together to test wiring and gradient stability. "
+        "Controller stays disabled to isolate the new modules from controller noise.",
+        training_focus=("narrative_coherence", "sleep_pressure", "trust_dynamics"),
+        controller_mode="disabled",
+        enable_narrative=True,
+        enable_sleep_dream=True,
+        enable_trust_dynamics=True,
+    ),
+    "round3_full": _profile(
+        "round3_full",
+        "Round 3: all new modules active with live controller and full memory pipeline. "
+        "Integrates narrative coherence into V_self, activity-weighted sleep pressure, "
+        "dream-driven narrative consolidation, and trust dynamics. "
+        "The first variant where the correspondence table has no stubs.",
+        training_focus=("narrative_coherence", "sleep_pressure", "trust_dynamics", "integrated_system"),
+        controller_mode="live",
+        enable_narrative=True,
+        enable_sleep_dream=True,
+        enable_trust_dynamics=True,
+        enable_memory_read=True,
+        enable_memory_write=True,
+        enable_memory_consolidation=True,
+        enable_social_relational=True,
+    ),
     "cycle7_adversarial": _profile(
         "cycle7_adversarial",
         "Cycle 7: adversarial stress testing — mechanical and constitutional. "

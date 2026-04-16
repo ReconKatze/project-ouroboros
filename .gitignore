@@ -4,3 +4,10 @@ __pycache__/
 *.pyc
 *.egg-info/
 .claude/
+# Third-party repos — cloned locally, not tracked
+hermes-agent-main/
+# Retired / local-only artifacts
+Amore/V2/
+Amore/.codex
+Amore/Readme(Old).txt
+Amore/files.zip

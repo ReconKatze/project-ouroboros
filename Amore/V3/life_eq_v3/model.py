@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -414,7 +415,12 @@ class LifeEquationModel(nn.Module):
             state.Z_auto[:, : self.config.d_narr] + 1e-6,
             dim=-1,
         ).unsqueeze(-1)
-        surprise = raw_errors_tensor.norm(dim=-1).mean(dim=-1, keepdim=True)
+        # Normalize surprise by sqrt(d_model) so the fixed threshold (1.0) is scale-invariant.
+        # Un-normalized: norm over d_model ≈ sqrt(d_model) ≈ 39 at random init — always exceeds
+        # threshold 1.0, giving 100% write rate that wastes the circular episodic buffer with noise.
+        # After normalization: surprise ≈ mean per-dimension error magnitude.  At random init ≈ 1.0;
+        # as pred_heads train, surprise drops below 1.0 and writes become selective.
+        surprise = raw_errors_tensor.norm(dim=-1).mean(dim=-1, keepdim=True) / math.sqrt(self.config.d_model)
         if self.profile.enable_memory_write:
             self.epi_module.write(x_t, state, surprise, state.Z_att.max(dim=-1, keepdim=True).values)
         if self.profile.enable_identity:
@@ -549,7 +555,7 @@ class LifeEquationModel(nn.Module):
             + alpha[:, 5].mean() * (state.Z_homeo - self.homeostasis_module.set_point.to(state.Z_homeo.device)).pow(2).mean()
             + alpha[:, 6].mean() * state.Z_sleep.mean()
             + switch_loss
-            - alpha[:, 7].mean() * coherence.mean()
+            - alpha[:, 7].mean() * coherence.clamp(min=0.0).mean()
             - alpha[:, 8].mean() * state.T_trust.mean()
         )
         # Scale L_reg so homeostatic terms (O(100-200)) don't drown the KL signal (O(0.3-1.1)).

@@ -244,6 +244,12 @@ def parse_args():
                    help="Run reload convergence test every N steps (0=disable)")
     p.add_argument("--ab-rollout-steps", type=int, default=20,
                    help="Val chunks per A/B rollout (controller + memory comparison)")
+    p.add_argument("--snapshot-identity", action="store_true",
+                   help="At end of training, commit I_0 = Z_id.clone().detach() and resave the "
+                        "final checkpoint. Use after cycle3_identity to bake the formed identity "
+                        "anchor into the checkpoint before advancing to integrated phases. "
+                        "I_0=zeros means has_seed=0 in V_self (drift penalty suppressed); "
+                        "seeding it here makes drift tracking live in round3_full and beyond.")
     return p.parse_args()
 
 
@@ -655,6 +661,20 @@ def main():
                     "summary": snapshot,
                     "triggered_events": triggered_events,
                 }, indent=2))
+
+    # §identity snapshot: commit I_0 = Z_id at end of cycle3_identity.
+    # I_0 is the frozen anchor for L_id and the V_self drift term. Without this,
+    # I_0 stays all-zeros forever: has_seed=0 (no drift penalty), and L_id = gamma_eff*||Z_id||²
+    # (pulls toward zero, fighting identity formation). Run cycle3_identity first, then
+    # pass --snapshot-identity to bake the shaped Z_id into I_0 before advancing to
+    # round3_full, phase5, cycle6, or cycle7 (all have enable_identity=True).
+    if args.snapshot_identity:
+        le_state.I_0 = le_state.Z_id.detach().clone()
+        i0_norm = float(le_state.I_0.norm().item())
+        print(f"Identity snapshot: I_0 ← Z_id  (norm={i0_norm:.4f})")
+        if i0_norm < 1e-3:
+            print("  WARNING: I_0 norm is near-zero — Z_id may not have been shaped yet. "
+                  "Verify cycle3_identity completed successfully before relying on this snapshot.")
 
     final_path = save_checkpoint(
         args.out,

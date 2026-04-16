@@ -108,9 +108,11 @@ def zero_state(
         (batch_size, config.n_id_heads, config.d_model), device=config.device
     )
 
-    # §26 v15: Z_values starts equal to α_0 (creator's values, frozen reference)
+    # §26 v15: Z_values starts equal to α_0 (creator's values, frozen reference).
+    # Defaults to config.alpha_0 — the deliberately seeded value weights.
+    # Pass alpha_0_seed explicitly only when overriding for tests or ablations.
     if alpha_0_seed is None:
-        alpha_0_seed = torch.ones(config.d_alpha, device=config.device)
+        alpha_0_seed = torch.tensor(config.alpha_0, dtype=torch.float32, device=config.device)
     a0 = alpha_0_seed.unsqueeze(0).expand(batch_size, -1).clone()
     z_values = a0.clone()
 

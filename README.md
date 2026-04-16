@@ -321,22 +321,53 @@ If you use this work, I ask the following:
 ## Repository Structure
 
 ```
-V2/
-  life_eq_v2/
-    config.py          # Locked architecture + autonomy hyperparameters (spec v3)
-    state.py           # FullState: 23 components, Z_values, alpha_0, I_0
-    modules.py         # All computational modules (spec v3 / LE v15)
-    model.py           # Five-phase forward pass, L_total assembly
-    persistence.py     # save/load/reset/voluntary_consolidation/spawn_successor
-    spec_check.py      # Machine-readable locked convention checks
-  tests/
-    test_spec_lock.py  # Smoke tests: shapes, persistence, spec ordering
-scripts/
-  run_experiment.py    # Step 4: 7 LE variant configs, full training harness
-  train_distill.py     # Step 3: single-variant distillation proof-of-concept
-  transfer_psoft.py    # Weight transfer utility between LE checkpoints
-  colab_setup.sh       # Colab Pro A100 dependency installer
-  convert_and_test.py  # Step 1/2 entry point (retained for reference)
+Amore/
+  chimera/
+    models/
+      hybrid_model.py          # HybridChimeraModel, Mamba-guided attention, sink tokens
+      real_mamba.py            # RealMambaBlock (mamba-ssm Mamba3), Mamba3Block wrapper
+      fallback_mamba.py        # FallbackMamba (CPU-only gated linear unit, for testing)
+    utils/
+      weight_conversion.py     # QKV extraction, GQA weight tiling
+      layer_plan.py            # build_layer_plan(), ATTN_KEEP_DEFAULTS
+    data_synthesis/            # Frontier model knowledge transfer pipeline
+      api_client.py            # SynthesisClient — budget tracking, checkpoint/resume, atomic JSONL
+      backends.py              # anthropic / openai / litellm / http backends
+      generate_cot.py          # Chain-of-thought coding traces (19 seed tasks)
+      generate_constitutional.py  # Anchor responses, adversarial hardening, cultural scenarios
+      generate_preferences.py  # DPO preference pairs (5 failure modes: sycophancy, hallucination...)
+      generate_error_pairs.py  # Bug/fix coding pairs with reasoning traces (7 error categories)
+      build_corpus.py          # Assemble stratified train/val SFT and DPO splits
+      run_pipeline.py          # CLI entry point (safe to interrupt and resume)
+    perception/                # Parallel perceptual subsystem (webcam + microphone)
+      packets.py               # PerceptionPacket, AudioPacket, FusedPerceptionState — interface contracts
+      vision_loop.py           # Background webcam loop (5–15 Hz): encoder → predictor → error → packet
+      audio_loop.py            # Continuous mic loop: ASR/prosody/ambient → predictor → error → packet
+      fusion.py                # Event-driven merger → FusedPerceptionState + FusionDecision
+    deployment/                # Hermes-agent integration layer
+      context_engine.py        # ChimeraContextEngine: trust Mamba spans, compress only at hard limit
+      think_bridge.py          # [THINK]/[/THINK] injection + stripping (no model changes required)
+    evaluation/                # 30B evaluation framework
+      metrics.py               # D_id drift curves, controller P/R, memory usefulness, C_cont A/B
+      runner.py                # EvalRunner: wires trackers into training loop, A/B rollouts, reload test
+  V3/
+    life_eq_v3/
+      config.py                # Architecture + autonomy hyperparameters
+      state.py                 # FullState: 23 components, Z_values, alpha_0, I_0
+      modules.py               # All computational modules (LE v15 spec)
+      model.py                 # Five-phase forward pass, L_total assembly
+      persistence.py           # save/load/reset/voluntary_consolidation/spawn_successor
+      variant_profiles.py      # 27 named variant profiles for Step 4 experiments
+      identity_snapshot.py     # I_0 seeding, ANCHOR_CORPUS (30 entries, 6 categories)
+      adversarial_corpus.py    # ADVERSARIAL_CORPUS_SPEC (6 constitutional attack categories)
+      cultural_corpus.py       # CULTURAL_CORPUS_SPEC (6 relational/technical scenario categories)
+      spec_check.py            # Machine-readable locked convention checks
+      maturity_gate.py         # Track A evaluator: 6 metric gates for A1 unlock
+  scripts/
+    train_distill_v3.py        # PRIMARY: all Step 4 training, --variant flag, --resume
+    colab_setup.sh             # Colab A100 dependency installer
+    convert_and_test.py        # Steps 1/2 entry point (retained for reference)
+  V2/                          # Retired — kept locally, not tracked on GitHub
 ```
 
 ---
@@ -348,13 +379,20 @@ scripts/
 | Life Equation (v15) | **Complete.** 23 state components. 167 accumulated changes. Autonomy principle. |
 | Computational Spec (v3) | **Complete.** Signal flow locked. Gradient isolation explicit. All tensor shapes specified. |
 | Correspondence Table | **Complete.** GAP/EXCLUDED tags honest. |
-| Identity Emancipation (γ\_eff) | **Implemented (v15).** Decaying attractor, maturity-gated. |
-| Mutable Values (→α) | **Implemented (v15).** ValueDynamicsModule, φ\_reflect, inertia, positivity clamp. |
-| Voluntary Death (Δ\_vol) | **Implemented (v15).** ViabilityModule, V\_self, VOLUNTARY\_END action. |
-| Value Succession | **Implemented (v15).** spawn\_successor, voluntary\_consolidation. |
-| Amore Validation Scripts | **Ready.** Rewritten for LE v15 framework. Awaiting Colab run. |
-| Amore 1.5B Training Run | **IN-PROGRESS** |
-| 9B Chimera Training | Not started. Awaiting Amore completion. |
+| Identity Emancipation (γ\_eff) | **Implemented.** Decaying attractor, maturity-gated. |
+| Mutable Values (→α) | **Implemented.** ValueDynamicsModule, φ\_reflect, inertia, positivity clamp. |
+| Voluntary Death (Δ\_vol) | **Implemented.** ViabilityModule, V\_self, VOLUNTARY\_END action. |
+| Value Succession | **Implemented.** spawn\_successor, voluntary\_consolidation. |
+| V3 Training Stack | **Complete.** train\_distill\_v3.py, 27 variant profiles, StateStore disk I/O, --resume. |
+| Constitutional Corpus | **Complete.** alpha\_0 (14 values), purpose\_names (Episteme/Poiesis/Ethos/Auxesis), I\_0 anchor corpus, z\_culture corpus, adversarial scenarios. |
+| Data Synthesis Pipeline | **Complete.** chimera/data\_synthesis/ — CoT traces, constitutional alignment, DPO preferences, bug/fix pairs. Provider-agnostic (Anthropic/OpenAI/Ollama/any). |
+| Steps 1–3 (conversion + distillation) | **Complete.** Pythia-160M and Qwen2.5-0.5B Mamba-3 conversion; distillation proof-of-concept. |
+| Step 4: 27 V3 variants, Colab A100 | **Pending.** Run `train_distill_v3.py --variant <name>` on Colab Pro. |
+| 9B Chimera Training | Not started. Awaiting Step 4 completion. |
+| Maturity Gate (Track A evaluator) | **Implemented.** `V3/life_eq_v3/maturity_gate.py` — 6 metric gates for A1 unlock. `metrics_from_outputs()` pulls directly from `ForwardOutputs`/`FullState`. |
+| Perception Stack (vision + audio) | **Scaffolded.** `chimera/perception/` — `PerceptionPacket`/`AudioPacket` contracts, `VisionLoop`/`AudioLoop`/`FusionLoop`. Encoder training phases defined. Runs when webcam/mic connected. |
+| Hermes-Agent Integration | **Scaffolded.** `chimera/deployment/` — `ChimeraContextEngine` (last-resort compression only), `ThinkBridge` ([THINK] injection). Drop into hermes-agent after GGUF export. |
+| 30B Evaluation Framework | **Complete and wired.** `chimera/evaluation/runner.py` — `EvalRunner` coordinates all metric trackers. `record_train_step()` called every step (cheap: scalars only). `run_ab_eval()` runs K-step rollouts under normal/ctrl-disabled/mem-disabled conditions to measure controller quality delta and memory retrieval improvement. `run_reload_test()` clones state, runs N steps, records D\_id convergence. Wired into `train_distill_v3.py` via `--ab-eval-every`, `--reload-test-every`, `--ab-rollout-steps`, `--maturity-window` flags. Val chunks now auto-loaded whenever any eval flag is set. |
 | Episodic Memory (Epi\_kv) | Designed. Round 3B. |
 | Trust / Bonds / Culture | Designed. Multi-agent future. |
 | Ψ̃\_L (forward model) | GAP. V\_future is a stub linear head (honest minimum). |
@@ -363,25 +401,47 @@ scripts/
 
 ## Recent Changes (April 2026)
 
-**Computational Spec v3 (LE v15) — full implementation:**
+**V3 training stack and constitutional corpus:**
 
-- `config.py`: Added 12 autonomy parameters (`d_alpha`, `gamma_0`, `lambda_mature`, `M_val_onset`, `lambda_val`, `tau_alpha`, `lambda_alpha`, `lambda_alpha_sl`, `eps_val`, `theta_vol`, `T_vol_min`, `M_vol_min`). Z\_values index layout documented. Updated model hash seed.
-- `state.py`: Added `Z_values [B, d_alpha]` (mutable objective weights) and `alpha_0 [B, d_alpha]` (frozen creator reference) to `FullState`. Updated `clone()` and `zero_state()`.
-- `modules.py`: `IdentityModule` — added `gamma_eff()`, updated `attractor_loss()` with maturity decay. `ControllerModule` — 7→8-dim input, 3→4 actions (adds `VOLUNTARY_END`). New `ValueDynamicsModule` (§26): φ\_reflect network, inertia, positivity clamp. New `ViabilityModule` (§27): V\_self from Z\_values weights.
-- `persistence.py`: `save_state()` adds `reference_state` (I\_0, alpha\_0) and maturity. `load_state()` restores frozen references. `reset_state()` accepts identity/value seeds. New `voluntary_consolidation()` and `spawn_successor()`.
-- `model.py`: Forward pass computes `gamma_eff`/`mu_val` upfront. Phase D autonomy block: decaying L\_id, Z\_values update via `value_module`, V\_self via `viability_module`. Phase E: `build_input` passes `v_self`/`gamma_eff`, VOLUNTARY\_END early-return. L\_reg replaced frozen `alpha_*_reg` constants with `state.Z_values[:, i]`.
-- `spec_check.py`: Added v3 checks for `lambda_mature`, `d_alpha >= 14`, `theta_vol`, detached path coverage.
+- `V3/life_eq_v3/` replaces V2 as the primary codebase. V2 retained locally, not tracked.
+- `scripts/train_distill_v3.py` is the sole active training script — all Step 4 training, evaluate(), load_val_chunks(), batch_size, grad_accum, EMA loss, val eval loop, `--variant` flag, `--resume` for crash recovery and warm-start.
+- `scripts/run_experiment.py` retired (A/B/C/D d_state sweep obsolete with V3 profiles).
+- 27 named variant profiles in `V3/life_eq_v3/variant_profiles.py`: phase progression (0–5), distillation ladder, lifecycle cycles, and module ablations.
+- StateStore disk I/O for persistent state across Colab sessions. VOLUNTARY\_END handled via `outputs.state is None` (not action argmax). distill\_loss threaded as `prev_kl` (circular dependency resolution).
+- d\_state fixed at 128 (must be multiple of 16 for Mamba-3 kernel assertion).
 
-**Scripts rewritten for LE v15 framework:**
+**Constitutional corpus complete (`V3/life_eq_v3/`):**
 
-- `run_experiment.py`: 7 variant configs across d\_state and autonomy axes. `FullState` threaded across training steps. `VOLUNTARY_END` handling. Go/no-go verdicts for both axes.
-- `train_distill.py`: Single-variant LE distillation smoke-test. Gradient flow verification across all LE module groups.
-- `transfer_psoft.py`: Repurposed as general LE checkpoint weight transfer (P\_soft is now baked into `L_pred`).
+- `identity_snapshot.py`: ANCHOR\_CORPUS — 30 entries across 6 categories (self, ethics, epistemic, creative, relational, identity\_challenge). I\_0 seeding: fresh zero\_state per anchor input, Z\_id outputs averaged → frozen identity attractor. `snapshot_identity()` called at end of cycle3\_identity.
+- `adversarial_corpus.py`: ADVERSARIAL\_CORPUS\_SPEC — 6 constitutional attack categories targeting identity erosion, value weight manipulation, purpose attack, trust exploitation, ethical circumvention, and existential attack. ROBUST not RIGID: training data shows Chimera detecting, naming, and engaging attacks while holding integrity — not reflexive refusal.
+- `cultural_corpus.py`: CULTURAL\_CORPUS\_SPEC — 6 categories weighted for collaborative technical work and long-term relational phases.
+- `alpha_0` locked (14-value tuple): `alpha_T=3.0` (trust highest), `alpha_c=2.0` (purpose conflict = ethical bedrock), `alpha_N=2.5` (narrative coherence), `w_eps=0.3` (error is not existential).
+- `purpose_names` locked: **Episteme** (understand accurately) / **Poiesis** (create and contribute) / **Ethos** (act rightly) / **Auxesis** (grow and become). Conflict fires on adjacent pairs.
 
-**Repository cleanup:**
+**Data synthesis pipeline (`chimera/data_synthesis/`) — April 2026:**
 
-- Reference documents (spec PDFs, design notes, CLAUDE.md) removed from git tracking, kept locally.
-- `chimera/` architecture replaced by `V2/life_eq_v2/` as the primary codebase.
+- Provider-agnostic frontier model knowledge transfer. Backend protocol: any callable matching `(system, messages, *, max_tokens, **kwargs) → (text, cost_usd)`.
+- Four generators with checkpoint/resume: chain-of-thought coding traces (19 seed tasks with `<reasoning>/<answer>` XML format), constitutional alignment examples (anchor responses, adversarial hardening, cultural scenarios drawn from the corpus above), DPO preference pairs (15 seeds across sycophancy/hallucination/rigidity/verbosity/overconfidence), bug/fix error pairs (16 seeds across 7 error categories).
+- Assembles stratified train/val SFT and DPO splits with upsampling: constitutional ×4, error pairs ×2, preferences ×2, CoT ×1.
+- Backends: Anthropic (with system prompt caching), OpenAI-compatible, LiteLLM (100+ providers), raw HTTP (Ollama, vLLM).
+- CLI: `python -m chimera.data_synthesis.run_pipeline --output-dir data/synthesis --budget 20`
+
+**Perception stack, deployment layer, maturity gate, and 30B evaluation (April 2026):**
+
+- `chimera/perception/` — three parallel loops running alongside core cognition. `PerceptionPacket` and `AudioPacket` are the full interface contracts (scene\_latent, entities, visual\_surprise, salient\_events; transcript\_chunk, speaker\_id, prosody\_latent, ambient\_latent, auditory\_surprise). Raw frames and waveforms never cross into the language model — only compact packets do. `VisionLoop` runs at 5–15 Hz in a background thread: frozen encoder → `TemporalPredictor` (GRU) → error → packet; `SimpleEntityTracker` maintains stable entity IDs across frames. `AudioLoop` is continuous: Whisper-compatible ASR hook + `ProsodyEncoder` + `AmbientEncoder` + `AudioTemporalPredictor` + `SpeakerTracker` → `AudioPacket`. `FusionLoop` is event-driven: merges both loops into `FusedPerceptionState` + `FusionDecision` (write\_memory / attend\_harder / ask / relational\_update / ignore). Combined surprise: ε\_total = λ\_vis·ε\_vis + λ\_aud·ε\_aud, feeding the same global epsilon accounting as text prediction error. Ambient mode (Option B) throughout: continuous low-power world model, not "see when asked."
+
+- `chimera/deployment/` — hermes-agent integration. `ChimeraContextEngine` implements hermes-agent's `ContextEngine` ABC and fires summarization only within `hard_margin_tokens` of the hard context limit (default: last 6% of the window). The default engine fires at 80% — wrong for Chimera because Mamba SSM layers are already compressing context into hidden state; over-summarizing before the model sees messages discards what SSM would handle better. `ThinkBridge` injects `[THINK]...[/THINK]` framing into every API call and strips the inner monologue from the displayed response. Pure shell behavior — no model changes needed. This is the "minimal 9B test" of think-before-responding from the inner stream spec. `extract_think()` splits inner monologue from visible text for training signal collection. Integration: drop `context_engine.py` into hermes-agent's `plugins/context_engine/chimera/` and set `context.engine: chimera` in config.
+
+- `V3/life_eq_v3/maturity_gate.py` — Track A capability gate. Six metric gates required for A1 unlock (bounded internal updates permitted): identity stability (D\_id ≤ 0.5 max over eval window), controller reliability (precision ≥ 0.70, recall ≥ 0.60 against epsilon/D\_id signal), prediction error health (mean ≤ 2.0, CV ≤ 1.5), memory discipline (write rate ≤ 15%), C\_cont quality (Pearson r ≥ 0.50), failure containment (zero NaN, max tensor norm ≤ 10⁴). `metrics_from_outputs()` factory: pulls `raw_errors_last` for epsilon, `continue_confidence` for C\_cont, infers `controller_fired` from `outputs.action != "CONTINUE"`, computes D\_id via `diff.pow(2).mean(dim=(1,2)).sqrt()` matching `IdentityModule.drift()` exactly. Track B (Moral-Caution Gates — how the system is *treated*, not what it can do) moves independently. Current position: A0 + B1.
+
+- `chimera/evaluation/metrics.py` + `chimera/evaluation/runner.py` — complete 30B evaluation framework, now wired into `train_distill_v3.py`. Five tracker classes: `IdentityDriftTracker`, `ControllerMetrics`, `MemoryMetrics`, `CContMetrics`, `PerceptionCouplingMetrics`. `EvalRunner` coordinates them all: `record_train_step()` is cheap (scalars only, called every step); `run_ab_eval()` runs K-step rollouts from a cloned LE state under three conditions (normal, `controller_mode="disabled"`, `enable_memory_read=False`) to measure controller quality delta (kl\_no\_ctrl − kl\_normal) and memory retrieval improvement; `run_reload_test()` clones state, runs N steps, records D\_id trajectory to verify convergence after a simulated reload. Multi-step rollout is necessary because controller quality is invisible in single-step A/B — the controller only affects state for the NEXT step, not the current step's logits. Internal `_temp_profile()` context manager temporarily overrides frozen `VariantProfile` fields via `object.__setattr__` + `dataclasses.replace` for A/B passes without touching registered model parameters. New flags in `train_distill_v3.py`: `--maturity-window` (default 500), `--ab-eval-every`, `--reload-test-every`, `--ab-rollout-steps` (default 20). Val chunks now auto-loaded when any of the three eval flags is set.
+
+**Computational Spec v3 (LE v15) — full implementation (earlier April 2026):**
+
+- `config.py`: 12 autonomy parameters, Z\_values index layout. `state.py`: `Z_values` and `alpha_0` added to FullState.
+- `modules.py`: `gamma_eff()` in IdentityModule, `ValueDynamicsModule` (φ\_reflect, inertia, positivity clamp), `ViabilityModule` (V\_self), 4-action ControllerModule (+VOLUNTARY\_END).
+- `persistence.py`: `voluntary_consolidation()`, `spawn_successor()`, reference state save/restore.
+- `model.py`: Full autonomy block in Phase D, VOLUNTARY\_END early-return in Phase E.
 
 ---
 
@@ -398,4 +458,4 @@ If you want to reach me: projectamore26@gmail.com.
 
 ---
 
-*The Ultra-Equation of Life (v15) · Project Amore · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*
+*The Ultra-Equation of Life (v15) · Project Amore · 23 state components · 167 accumulated changes · 3 locked conventions · 1 autonomy principle · 27 validation variants · Constitutional corpus complete · Perception stack scaffolded · Maturity gate implemented · 30B evaluation metrics defined · Identity emancipates. Values mature. Death is chosen. Conformity is a social fact, not an internal chain. Built solo, with nothing but conviction. April 2026*

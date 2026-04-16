@@ -39,6 +39,7 @@ from life_eq_v3.state import FullState
 from life_eq_v3.telemetry import (
     render_snapshot_summary,
 )
+from chimera.evaluation.runner import EvalRunner
 
 
 def get_amp_dtype() -> torch.dtype:
@@ -230,6 +231,14 @@ def parse_args():
                    help="Evaluate on held-out val set every N steps (0=disable)")
     p.add_argument("--n-val", type=int, default=100,
                    help="Number of val chunks to pre-tokenise")
+    p.add_argument("--maturity-window", type=int, default=500,
+                   help="Rolling window for maturity gate and all metric trackers")
+    p.add_argument("--ab-eval-every", type=int, default=0,
+                   help="Run multi-step A/B rollout eval every N steps (0=disable)")
+    p.add_argument("--reload-test-every", type=int, default=0,
+                   help="Run reload convergence test every N steps (0=disable)")
+    p.add_argument("--ab-rollout-steps", type=int, default=20,
+                   help="Val chunks per A/B rollout (controller + memory comparison)")
     return p.parse_args()
 
 
@@ -272,10 +281,17 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     val_chunks: list = []
-    if args.eval_every > 0:
+    need_val = args.eval_every > 0 or args.ab_eval_every > 0 or args.reload_test_every > 0
+    if need_val:
         print(f"Pre-tokenising {args.n_val} val chunks (test split)...")
         val_chunks = load_val_chunks(tokenizer, args.seq_len, args.n_val)
         print(f"  Loaded {len(val_chunks)} val chunks.")
+
+    runner = EvalRunner(
+        maturity_window=args.maturity_window,
+        ab_rollout_steps=args.ab_rollout_steps,
+        temperature=args.temperature,
+    )
 
     optimizer = torch.optim.AdamW([p for p in student.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.01)
     warmup_steps = min(args.warmup_steps, args.steps // 10)
@@ -340,6 +356,7 @@ def main():
 
     for step in range(start_step + 1, args.steps + 1):
         pre_state = detach_state(le_state)
+        pre_epi_index = le_state.epi_index
         input_ids = torch.stack([next_chunk() for _ in range(args.batch_size)]).to(device)
         with torch.no_grad():
             teacher_last = teacher(input_ids=input_ids).logits[:, -1, :].float()
@@ -357,6 +374,8 @@ def main():
                 prev_layer_input=prev_layer_input,
                 distill_loss=prev_kl,
             )
+
+        runner.record_train_step(step, outputs, pre_epi_index)
 
         if outputs.state is None:
             full_snapshot = build_full_forensic_snapshot(
@@ -548,6 +567,29 @@ def main():
             lr_now = scheduler.get_last_lr()[0]
             diag = _diag_summary(outputs)
             print(f"step={step:6d} | val={val_loss:.4f} | ema={ema_loss:.4f} | lr={lr_now:.2e}" + (f" | {diag}" if diag else ""))
+            runner.print_report(step)
+
+        if args.ab_eval_every > 0 and step % args.ab_eval_every == 0 and val_chunks:
+            ab_summary = runner.run_ab_eval(student, teacher, val_chunks, le_state, device, amp_dtype)
+            ctrl_d = ab_summary.get("ctrl_ab_delta", float("nan"))
+            kl_n = ab_summary.get("kl_normal", float("nan"))
+            kl_nc = ab_summary.get("kl_no_ctrl", float("nan"))
+            line = f"  A/B  ctrl_delta={ctrl_d:.4f}  kl_normal={kl_n:.4f}  kl_no_ctrl={kl_nc:.4f}"
+            mem_d = ab_summary.get("mem_ab_delta")
+            if mem_d is not None:
+                line += f"  mem_delta={mem_d:.4f}"
+            print(line)
+
+        if args.reload_test_every > 0 and step % args.reload_test_every == 0 and val_chunks:
+            reload_summary = runner.run_reload_test(
+                student, teacher, val_chunks, le_state, device, amp_dtype, step=step
+            )
+            print(
+                f"  reload  D_id_before={reload_summary['d_id_at_reload']:.4f}"
+                f"  D_id_final={reload_summary['d_id_final']:.4f}"
+                f"  converges={reload_summary['converges']}"
+                f"  steps={reload_summary['n_steps_run']}"
+            )
 
         triggered_events = forensic.evaluate_triggers(
             step=step,

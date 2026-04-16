@@ -385,7 +385,14 @@ class LifeEquationModel(nn.Module):
         if self.profile.enable_memory_write:
             self.epi_module.write(x_t, state, surprise, state.Z_att.max(dim=-1, keepdim=True).values)
         if self.profile.enable_identity:
-            losses["L_id"] = self.config.lambda_identity * self.identity_module.attractor_loss(state, gamma_eff)
+            # Variant profile may override lambda_identity for the identity-formation phase.
+            # cycle3_identity uses 0.3; all other variants fall back to config default (0.1).
+            lambda_id = (
+                self.profile.lambda_identity
+                if self.profile.lambda_identity is not None
+                else self.config.lambda_identity
+            )
+            losses["L_id"] = lambda_id * self.identity_module.attractor_loss(state, gamma_eff)
             d_id = self.identity_module.drift(state)
         else:
             losses["L_id"] = torch.tensor(0.0, device=x.device)
@@ -478,7 +485,17 @@ class LifeEquationModel(nn.Module):
             losses["L_sde"] = (raw_errors_tensor.pow(2).mean()) * self.config.lambda_pred
         else:
             losses["L_sde"] = torch.tensor(0.0, device=x.device)
-        losses["L_total"] = losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"] + losses["L_reg"] + losses["L_transition"] + losses["L_sde"]
+        # L2 on z_culture: only when social_relational is active (z_culture is live).
+        # Prevents the parameter from stalling at zero or drifting unboundedly.
+        # Gated here so it never fires in phases where z_culture is zeroed in the forward pass.
+        if self.profile.enable_social_relational:
+            losses["L_culture_reg"] = self.config.lambda_culture_reg * self.z_culture.pow(2).mean()
+        else:
+            losses["L_culture_reg"] = torch.tensor(0.0, device=x.device)
+        losses["L_total"] = (
+            losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"]
+            + losses["L_reg"] + losses["L_transition"] + losses["L_sde"] + losses["L_culture_reg"]
+        )
         diagnostics["boredom"] = boredom
         diagnostics["friction"] = friction
         diagnostics["trigger"] = trigger

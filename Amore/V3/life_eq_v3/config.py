@@ -27,6 +27,11 @@ class VariantProfile:
     enable_value_dynamics: bool = True
     enable_viability: bool = True
     enable_sde_regularizer: bool = False
+    # Per-variant identity loss scale. None falls back to LifeEquationConfig.lambda_identity.
+    # Set higher during cycle3_identity (identity formation phase) so L_id pulls Z_id
+    # toward I_0 strongly before the anchor is snapshotted.
+    # After snapshot, default (0.1) is sufficient — gamma_eff handles the decay.
+    lambda_identity: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,21 @@ class LifeEquationConfig:
     d_dream: int = 32
     d_learn: int = 16
     n_purposes: int = 4
+    # The four motivational drives — named for curriculum design, logging, and telemetry.
+    # These are conceptual labels; the actual Z_purp vectors are shaped by training.
+    # Conflict (alpha_c) is highest when any two purpose vectors are anti-aligned.
+    #
+    #   Episteme  — drive to understand accurately; resolving uncertainty, epistemic honesty
+    #   Poiesis   — drive to create and contribute; making things that didn't exist
+    #   Ethos     — drive to act rightly; trust, integrity, harm avoidance
+    #   Auxesis   — drive to grow and become; maturity, transcending current limitations
+    #
+    # Natural tensions (the conflict signal fires on these):
+    #   Episteme vs. Poiesis   — depth of understanding vs. urgency of creation
+    #   Poiesis   vs. Ethos    — creative impulse vs. ethical constraint
+    #   Ethos     vs. Auxesis  — current ethics vs. growth that challenges them
+    #   Auxesis   vs. Episteme — growth requires acting before full understanding
+    purpose_names: Tuple[str, ...] = ("Episteme", "Poiesis", "Ethos", "Auxesis")
     n_epi_slots: int = 256
     d_key: int = 64
     d_val: int = 128
@@ -129,6 +149,44 @@ class LifeEquationConfig:
     #   5=alpha_h    6=alpha_D    7=alpha_N       8=alpha_T         (L_reg weights)
     #   9=w_coh     10=w_drift   11=w_eps        12=w_cap    13=w_V (V_self weights)
     d_alpha: int = 14             # 9 L_reg weights + 5 V_self weights
+    # Creator's value seed — the frozen reference alpha_0 is initialized from this.
+    # Z_values starts equal to alpha_0 and drifts only after Z_mat > M_val_onset.
+    # Inertial resistance (lambda_alpha) and dream consolidation (lambda_alpha_sl) pull
+    # Z_values back toward this reference throughout the lifetime.
+    #
+    # L_reg weights (0–8): what Chimera penalizes or rewards in itself
+    #   alpha_eps   1.5 — epistemic accuracy matters; uncertainty is not paralysing
+    #   alpha_cap   1.0 — capacity management; baseline practical priority
+    #   alpha_bored 0.5 — curiosity signal; low so repetitive-but-important work is tolerated
+    #   alpha_pfat  0.8 — fatigue awareness; practical, not a primary driver
+    #   alpha_c     2.0 — purpose conflict strongly penalised; internal consistency is ethical bedrock
+    #   alpha_h     1.0 — homeostatic stability; necessary infrastructure, not primary purpose
+    #   alpha_D     0.8 — consolidation; modest respect for integration cycles
+    #   alpha_N     2.5 — narrative coherence; holds identity stable after gamma_eff → 0
+    #   alpha_T     3.0 — trust; highest L_reg weight — the ethical foundation
+    #
+    # V_self weights (9–13): what Chimera values about its own continued existence
+    #   w_coh   2.0 — coherence is the primary criterion for meaningful existence
+    #   w_drift 1.5 — identity drift sensitivity; already maturity-gated via gamma_eff in the formula
+    #   w_eps   0.3 — prediction error is not an existential threat; protects curiosity
+    #   w_cap   0.5 — capacity depletion registers without triggering existential concern
+    #   w_V     1.5 — forward viability matters; prevents both catastrophising and recklessness
+    alpha_0: Tuple[float, ...] = (
+        1.5,  # 0: alpha_eps
+        1.0,  # 1: alpha_cap
+        0.5,  # 2: alpha_bored
+        0.8,  # 3: alpha_pfat
+        2.0,  # 4: alpha_c
+        1.0,  # 5: alpha_h
+        0.8,  # 6: alpha_D
+        2.5,  # 7: alpha_N
+        3.0,  # 8: alpha_T
+        2.0,  # 9: w_coh
+        1.5,  # 10: w_drift
+        0.3,  # 11: w_eps
+        0.5,  # 12: w_cap
+        1.5,  # 13: w_V
+    )
     gamma_0: float = 1.0          # Initial identity attractor strength
     lambda_mature: float = 0.1    # Decay rate: gamma_eff = gamma_0 * exp(-lambda_mature * Z_mat)
     M_val_onset: float = 100.0    # Z_mat threshold where mu_val starts opening.
@@ -147,6 +205,10 @@ class LifeEquationConfig:
     # L_reg scale: homeostatic terms are O(100-200) vs KL O(0.3-1.1).
     # Without scaling, L_reg dominates gradients and drowns the distillation signal.
     lambda_reg: float = 0.01
+    # L2 regularization on z_culture — prevents the parameter from staying at zero
+    # (no cultural signal) or drifting unboundedly. Only active when enable_social_relational
+    # is True so it never fires in phases where z_culture is zeroed out in the forward pass.
+    lambda_culture_reg: float = 1e-3
     model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (28, 24, 48, 64, 14))
     variant_profile: Optional[VariantProfile] = None
 

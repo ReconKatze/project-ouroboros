@@ -13,17 +13,29 @@ __all__ = [
 
 try:
     from .forensics import ForensicConfig, ForensicEventManager
+    from .identity_snapshot import (
+        ANCHOR_CATEGORIES,
+        ANCHOR_CORPUS,
+        apply_identity_snapshot,
+        build_anchor_corpus,
+        snapshot_identity,
+    )
     from .model import LifeEquationModel
     from .persistence import StateStore
     from .state import FullState, ManifestEntry, zero_state
 
     __all__.extend(
         [
+            "ANCHOR_CATEGORIES",
+            "ANCHOR_CORPUS",
+            "apply_identity_snapshot",
+            "build_anchor_corpus",
             "ForensicConfig",
             "ForensicEventManager",
             "FullState",
             "LifeEquationModel",
             "ManifestEntry",
+            "snapshot_identity",
             "StateStore",
             "zero_state",
         ]

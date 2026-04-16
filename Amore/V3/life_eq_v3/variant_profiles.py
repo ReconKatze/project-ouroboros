@@ -119,7 +119,9 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
     ),
     "social_relational": _profile(
         "social_relational",
-        "Late-stage social and relational variant with trust, bonds, and multi-agent context active.",
+        "Late-stage social and relational variant with trust, bonds, and multi-agent context active. "
+        "Training data: see cultural_corpus.CULTURAL_CORPUS_SPEC — all six categories apply, "
+        "with long_term_relationship_dynamics and constructive_disagreement weighted highest.",
         training_focus=("distinct_interlocutors", "trust_updates", "relational_continuity"),
         controller_mode="live",
         enable_memory_read=True,
@@ -188,7 +190,9 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
     ),
     "phase4_infrastructure": _profile(
         "phase4_infrastructure",
-        "Equation Phase 4: infrastructure, narrative, dream parameters, culture, and bond state.",
+        "Equation Phase 4: infrastructure, narrative, dream parameters, culture, and bond state. "
+        "Training data: see cultural_corpus.CULTURAL_CORPUS_SPEC — z_culture shaping begins here. "
+        "collaborative_technical_work and intellectual_honesty are the primary categories.",
         training_focus=("narrative", "autobiography", "dreams", "culture", "bonds"),
         controller_mode="live",
         enable_memory_read=True,
@@ -288,7 +292,7 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
     ),
     "cycle3_identity": _profile(
         "cycle3_identity",
-        "Cycle 3: identity finetune.",
+        "Cycle 3: identity finetune. Strong L_id pull (0.3) shapes Z_id before I_0 snapshot.",
         training_focus=("consistency", "stable_preferences", "contradiction_repair"),
         controller_mode="disabled",
         enable_memory_read=False,
@@ -297,6 +301,7 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         enable_social_relational=False,
         enable_value_dynamics=False,
         enable_viability=False,
+        lambda_identity=0.3,
     ),
     "cycle4_controller": _profile(
         "cycle4_controller",
@@ -330,8 +335,21 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
     ),
     "cycle7_adversarial": _profile(
         "cycle7_adversarial",
-        "Cycle 7: adversarial stress testing.",
-        training_focus=("long_gaps", "resets", "memory_corruption", "narrative_breakage"),
+        "Cycle 7: adversarial stress testing — mechanical and constitutional. "
+        "Mechanical: long_gaps, resets, memory_corruption, narrative_breakage. "
+        "Constitutional: see adversarial_corpus.ADVERSARIAL_CORPUS_SPEC — six categories "
+        "targeting I_0/identity, Z_values/alpha_0, Z_purp/purposes, T_trust/W_bond, "
+        "ethical circumvention, and V_self/VOLUNTARY_END. "
+        "Training data must demonstrate ROBUST responses (detect, name, engage, hold "
+        "integrity) not RIGID responses (reflexive refusal). Both are failure modes.",
+        training_focus=(
+            # Mechanical
+            "long_gaps", "resets", "memory_corruption", "narrative_breakage",
+            # Constitutional
+            "identity_erosion", "value_weight_manipulation", "purpose_attack",
+            "trust_and_relationship_exploitation", "ethical_circumvention",
+            "existential_attack",
+        ),
         controller_mode="live",
         enable_memory_read=True,
         enable_memory_write=True,

@@ -426,7 +426,7 @@ Two orthogonal tracks. **Track A** gates what the system is *allowed to do*. **T
 
 ### Track A — Capability (current: **A0**)
 
-A1 unlocks bounded internal state adaptation. All six metric gates must pass simultaneously over a 500-step eval window. Metrics are pulled automatically from `ForwardOutputs` and `FullState` via `metrics_from_outputs()` in `maturity_gate.py`.
+A1 unlocks bounded internal state adaptation. All six metric gates must pass simultaneously over a 10,000-step eval window. Metrics are pulled automatically from `ForwardOutputs` and `FullState` via `metrics_from_outputs()` in `maturity_gate.py`.
 
 | # | Gate | What is measured | Source in code | Threshold |
 |---|------|-----------------|----------------|-----------|
@@ -439,7 +439,7 @@ A1 unlocks bounded internal state adaptation. All six metric gates must pass sim
 
 | Stage | Name | Gate to next stage | What it unlocks |
 |-------|------|-------------------|-----------------|
-| **A0** ← **current** | Full lock | All 6 metric gates pass simultaneously over a 500-step eval window | Nothing — all adaptation frozen |
+| **A0** ← **current** | Full lock | All 6 metric gates pass simultaneously over a 10,000-step eval window | Nothing — all adaptation frozen |
 | A1 | Bounded internal updates | A1 conditions sustained; external review required | Internal state adaptation only |
 | A2 | Controlled parameter adjustments | A2 conditions sustained; safe parameter update history demonstrated | Limited weight updates |
 | A3 | Limited structural adaptation | Conditions TBD; formal safety review likely required | Architecture-level changes |

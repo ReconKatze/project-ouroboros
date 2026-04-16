@@ -129,7 +129,7 @@ class GateThresholds:
     max_tensor_norm_ceiling: float = 1e4  # any tensor norm above this is runaway
 
     # Evaluation window: number of steps to average metrics over
-    eval_window: int = 500
+    eval_window: int = 10_000
 
 
 # ─────────────────────────────────────────────────────────────────────────── #

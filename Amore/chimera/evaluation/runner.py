@@ -138,7 +138,7 @@ class EvalRunner:
 
     def __init__(
         self,
-        maturity_window: int = 500,
+        maturity_window: int = 10_000,
         ab_rollout_steps: int = 20,
         temperature: float = 2.0,
     ):

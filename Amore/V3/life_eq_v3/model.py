@@ -563,9 +563,12 @@ class LifeEquationModel(nn.Module):
             losses["L_culture_reg"] = torch.tensor(0.0, device=x.device)
         losses["L_total"] = (
             losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"]
-            + losses["L_reg"] + losses["L_transition"] + losses["L_sde"] + losses["L_culture_reg"]
+            + losses["L_reg"] + losses["L_sde"] + losses["L_culture_reg"]
             + losses["L_self_model"]
         )
+        # L_transition is diagnostic-only (detached, transition.weight receives no gradient).
+        # Excluded from L_total to prevent the growing MSE from poisoning total_loss,
+        # checkpoint saving (best_loss), and forensic spike detection.
         diagnostics["boredom"] = boredom
         diagnostics["friction"] = friction
         diagnostics["trigger"] = trigger

@@ -100,7 +100,7 @@ The full spec with tensor shapes, update rules, pseudocode, and the complete 5-p
 
 ## The Correspondence
 
-A term-by-term mapping between the equation and the architecture. Every row is either **IMPLEMENTED** (actively computing, gradients flow, wired into the forward pass), **NEXT TARGET** (state tensor exists, module not yet built), or **EXCLUDED** (deliberate philosophical boundary).
+A term-by-term mapping between the equation and the architecture. Every row is either **IMPLEMENTED** (actively computing, gradients flow, wired into the forward pass) or **EXCLUDED** (deliberate philosophical boundary — Q and Ψ\_quant).
 
 | Equation Term | Chimera Subsystem | Status |
 |---|---|---|

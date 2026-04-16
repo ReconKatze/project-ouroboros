@@ -877,7 +877,8 @@ class NarrativeModule(nn.Module):
         z_narr_new = self.narr_gru(late_pool.detach(), z_narr)
         if consolidating and dream_residual is not None:
             # Sleep: gentle nudge from dream replay into the narrative
-            z_narr_new = z_narr_new + 0.05 * dream_residual.detach()
+            # Cast dream_residual to wdtype (DreamModule returns float32 after .float() below)
+            z_narr_new = z_narr_new + 0.05 * dream_residual.detach().to(dtype=wdtype)
 
         # Auto-expectation: slow EMA toward identity-grounded narrative target
         target = self.id_to_auto(active_identity.detach())              # [B, d_narr]
@@ -887,7 +888,8 @@ class NarrativeModule(nn.Module):
         if z_auto.shape[-1] > self.config.d_narr:
             z_auto_new = torch.cat([z_auto_new, z_auto[:, self.config.d_narr:]], dim=-1)
 
-        return z_narr_new, z_auto_new
+        # Return float32 — state tensors must stay float32 (L_reg multiplies against float32 alpha)
+        return z_narr_new.float(), z_auto_new.float()
 
 
 # ─────────────────────────────────────────────────────────────────────────── #
@@ -926,13 +928,14 @@ class SleepModule(nn.Module):
         # Cast state tensor to module dtype (handles float32 state under bfloat16 autocast)
         z_sleep = z_sleep.to(dtype=self.pressure_proj.weight.dtype)
         if consolidating:
-            return (z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
+            return (z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0).float()
         # Activity triplet: each component normalised to [0, 1]
         att  = z_att.abs().mean(dim=-1, keepdim=True).detach().clamp(max=5.0) / 5.0
         eps  = z_eps.norm(dim=-1, keepdim=True).detach().clamp(max=10.0) / 10.0
         pfat = z_pfat.detach().clamp(max=10.0) / 10.0
         pressure = torch.sigmoid(self.pressure_proj(torch.cat([att, eps, pfat], dim=-1)))  # [B, 1]
-        return (z_sleep + pressure / self.config.tau_sleep).clamp(min=0.0, max=10.0)
+        # Return float32 — state tensors must stay float32 (L_reg multiplies against float32 alpha)
+        return (z_sleep + pressure / self.config.tau_sleep).clamp(min=0.0, max=10.0).float()
 
 
 # ─────────────────────────────────────────────────────────────────────────── #
@@ -975,11 +978,12 @@ class DreamModule(nn.Module):
         z_dream = z_dream.to(dtype=wdtype)
         if not consolidating:
             # Awake: dream state fades (τ_dream ≈ 128 steps)
-            return z_dream * (1.0 - 1.0 / 128.0), None
+            # Return float32 — state tensors must stay float32 (L_reg multiplies against float32 alpha)
+            return (z_dream * (1.0 - 1.0 / 128.0)).float(), None
 
         n_filled = min(state.epi_index, state.epi_keys.shape[0])
         if n_filled == 0:
-            return z_dream, None
+            return z_dream.float(), None
 
         # Uniform replay: mean over all stored episodic values (no query — dreams browse broadly)
         vals    = state.epi_vals[:n_filled].to(device=z_dream.device, dtype=wdtype)  # [n_filled, d_val]
@@ -989,7 +993,8 @@ class DreamModule(nn.Module):
         # EMA toward replay content (τ = 16 consolidation steps)
         z_dream_new   = z_dream + (replay.detach() - z_dream) / 16.0
         narr_residual = self.dream_to_narr(z_dream_new.detach())         # [B, d_narr]
-        return z_dream_new, narr_residual
+        # Return float32 — state tensors must stay float32 (L_reg multiplies against float32 alpha)
+        return z_dream_new.float(), narr_residual.float()
 
 
 # ─────────────────────────────────────────────────────────────────────────── #
@@ -1038,4 +1043,5 @@ class TrustModule(nn.Module):
         trust_target = torch.sigmoid(self.trust_proj(trust_input)).mean()           # scalar
 
         tau = getattr(self.config, "tau_trust", 32.0)
-        return (t_trust + (trust_target - t_trust) / tau).clamp(0.0, 1.0)
+        # Return float32 — state tensors must stay float32 (L_reg multiplies against float32 alpha)
+        return (t_trust + (trust_target - t_trust) / tau).clamp(0.0, 1.0).float()

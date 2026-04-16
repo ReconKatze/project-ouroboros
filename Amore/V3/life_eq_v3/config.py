@@ -32,6 +32,11 @@ class VariantProfile:
     # toward I_0 strongly before the anchor is snapshotted.
     # After snapshot, default (0.1) is sufficient — gamma_eff handles the decay.
     lambda_identity: Optional[float] = None
+    # Per-variant theta_vol override for the VOLUNTARY_END gate.
+    # None falls back to LifeEquationConfig.theta_vol (0.3).
+    # Set lower (e.g. -1.0) when V_self sits near zero at initialization to prevent
+    # a randomly-initialized policy from gating VOLUNTARY_END on normal near-zero V_self.
+    theta_vol: Optional[float] = None
     # §Ψ̃_L SelfDynamicsModel: GRU trajectory predictor over (d_id, eps, c_cont, v_self).
     # Disabled by default; enable in Round 3+ variants where controller foresight matters.
     # When enabled: V_self is augmented pessimistically by the prev-step prediction,

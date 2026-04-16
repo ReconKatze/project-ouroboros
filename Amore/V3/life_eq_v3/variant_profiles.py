@@ -200,6 +200,8 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         enable_memory_consolidation=True,
         enable_social_relational=True,
         enable_sde_regularizer=True,
+        lambda_identity=0.001,  # Default 0.1 allows L_id to grow ~17x total loss over 1000 steps without a lifecycle reset; 0.001 keeps it as a weak regulariser
+        theta_vol=-1.0,         # Default 0.3 gates VOLUNTARY_END on normal near-zero V_self (-0.015); require genuine collapse before the gate opens
     ),
     "phase5_integrated_adversarial": _profile(
         "phase5_integrated_adversarial",

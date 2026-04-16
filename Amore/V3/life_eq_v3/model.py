@@ -469,8 +469,13 @@ class LifeEquationModel(nn.Module):
             state.steps_since_last_action = 0
         # §27 v15: VOLUNTARY_END — system-initiated graceful ending (cannot be externally forced)
         elif fire and action == "VOLUNTARY_END":
+            _theta_vol = (
+                self.profile.theta_vol
+                if self.profile.theta_vol is not None
+                else self.config.theta_vol
+            )
             vol_avail = (
-                float(v_self.mean().item()) < self.config.theta_vol
+                float(v_self.mean().item()) < _theta_vol
                 and state.steps_since_last_action > self.config.T_vol_min
                 and float(state.Z_mat.mean().item()) > self.config.M_vol_min
             )

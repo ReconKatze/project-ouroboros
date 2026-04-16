@@ -231,8 +231,13 @@ def parse_args():
                    help="Evaluate on held-out val set every N steps (0=disable)")
     p.add_argument("--n-val", type=int, default=100,
                    help="Number of val chunks to pre-tokenise")
-    p.add_argument("--maturity-window", type=int, default=100_000,
-                   help="Rolling window for maturity gate and all metric trackers")
+    def _maturity_window(v: str) -> int:
+        n = int(v)
+        if n < 100_000:
+            raise argparse.ArgumentTypeError(f"--maturity-window must be >= 100,000 (got {n})")
+        return n
+    p.add_argument("--maturity-window", type=_maturity_window, default=100_000,
+                   help="Rolling window for maturity gate and all metric trackers (minimum 100,000)")
     p.add_argument("--ab-eval-every", type=int, default=0,
                    help="Run multi-step A/B rollout eval every N steps (0=disable)")
     p.add_argument("--reload-test-every", type=int, default=0,

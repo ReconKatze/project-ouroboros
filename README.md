@@ -476,7 +476,7 @@ Full license texts are in [`LICENSES.md`](LICENSES.md).
 | [PyTorch](https://github.com/pytorch/pytorch) — Meta | **BSD 3-Clause** | Core tensor framework; not bundled. |
 | [HuggingFace Transformers](https://github.com/huggingface/transformers) | **Apache 2.0** | Model loading, tokenizers; not bundled. |
 
-All original code in this repository is the work of the author (ReconKatze).
+All original code in this repository is the work of the author (ReconKatze/Azathoth).
 
 ---
 

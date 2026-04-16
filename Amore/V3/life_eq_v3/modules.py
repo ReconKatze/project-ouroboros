@@ -753,10 +753,12 @@ class SelfDynamicsModel(nn.Module):
         # Prediction head: map GRU hidden → next-step scalar estimates
         self.pred_head = nn.Linear(config.d_sdm, self.SUMMARY_DIM)
 
-    def _pack_input(self, summary: torch.Tensor, action_idx: int) -> torch.Tensor:
+    def _pack_input(self, summary: torch.Tensor, action_idx) -> torch.Tensor:
         """[B, 4+4] — summary scalars + action embedding."""
         batch = summary.shape[0]
-        act = torch.full((batch,), action_idx, dtype=torch.long, device=summary.device)
+        if isinstance(action_idx, torch.Tensor):
+            action_idx = int(action_idx.reshape(-1)[0].item())
+        act = torch.full((batch,), int(action_idx), dtype=torch.long, device=summary.device)
         act_emb = self.action_embed(act)                      # [B, N_ACTIONS]
         return torch.cat([summary, act_emb], dim=-1)          # [B, 8]
 
@@ -867,6 +869,10 @@ class NarrativeModule(nn.Module):
         dream_residual: Optional[torch.Tensor],  # [B, d_narr] or None
         consolidating: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Cast state tensors to module dtype (handles float32 state under bfloat16 autocast)
+        wdtype = self.narr_gru.weight_ih.dtype
+        z_narr = z_narr.to(dtype=wdtype)
+        z_auto = z_auto.to(dtype=wdtype)
         # Narrative update via GRU (integrates recent cognitive history)
         z_narr_new = self.narr_gru(late_pool.detach(), z_narr)
         if consolidating and dream_residual is not None:
@@ -917,6 +923,8 @@ class SleepModule(nn.Module):
         z_pfat: torch.Tensor,    # [B, 1]
         consolidating: bool,
     ) -> torch.Tensor:
+        # Cast state tensor to module dtype (handles float32 state under bfloat16 autocast)
+        z_sleep = z_sleep.to(dtype=self.pressure_proj.weight.dtype)
         if consolidating:
             return (z_sleep - 1.0 / self.config.tau_sleep).clamp_min(0.0)
         # Activity triplet: each component normalised to [0, 1]
@@ -962,6 +970,9 @@ class DreamModule(nn.Module):
         consolidating: bool,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Returns (z_dream_new [B, d_dream], narr_residual [B, d_narr] or None)."""
+        # Cast state tensor to module dtype (handles float32 state under bfloat16 autocast)
+        wdtype  = self.val_to_dream.weight.dtype
+        z_dream = z_dream.to(dtype=wdtype)
         if not consolidating:
             # Awake: dream state fades (τ_dream ≈ 128 steps)
             return z_dream * (1.0 - 1.0 / 128.0), None
@@ -971,7 +982,7 @@ class DreamModule(nn.Module):
             return z_dream, None
 
         # Uniform replay: mean over all stored episodic values (no query — dreams browse broadly)
-        vals    = state.epi_vals[:n_filled].to(z_dream.device)          # [n_filled, d_val]
+        vals    = state.epi_vals[:n_filled].to(device=z_dream.device, dtype=wdtype)  # [n_filled, d_val]
         replay  = self.val_to_dream(vals.mean(dim=0, keepdim=True))     # [1, d_dream]
         replay  = replay.expand(z_dream.shape[0], -1)                   # [B, d_dream]
 
@@ -1016,6 +1027,8 @@ class TrustModule(nn.Module):
         coherence: torch.Tensor,  # [B, 1]
         d_id: torch.Tensor,       # [B, 1]
     ) -> torch.Tensor:
+        # Cast state tensor to module dtype (handles float32 state under bfloat16 autocast)
+        t_trust = t_trust.to(dtype=self.trust_proj.weight.dtype)
         # Reliability inputs — normalised to [0, 1], all detached
         eps_rel   = 1.0 - z_eps.norm(dim=-1, keepdim=True).detach().clamp(max=10.0) / 10.0  # [B,1]
         coh_norm  = coherence.detach().clamp(-1.0, 1.0)                                       # [B,1]

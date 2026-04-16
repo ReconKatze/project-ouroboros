@@ -561,7 +561,7 @@ TRAINING_CMD = textwrap.dedent("""\
         --ab-eval-every 1000 \\
         --ab-rollout-steps 20 \\
         --reload-test-every 2000 \\
-        --maturity-window 10000 \\
+        --maturity-window 100000 \\
         --checkpoint-every 1000 \\
         --out checkpoints/step4_le_v3.pt \\
         --best-out checkpoints/step4_le_v3_best.pt \\

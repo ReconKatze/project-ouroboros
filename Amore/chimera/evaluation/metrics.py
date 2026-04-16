@@ -249,7 +249,7 @@ class CContMetrics:
       b) Direct A/B: quality with intervention vs. quality without.
     """
 
-    def __init__(self, window: int = 10_000):
+    def __init__(self, window: int = 100_000):
         self._predictions: Deque[float] = deque(maxlen=window)
         self._actuals: Deque[float] = deque(maxlen=window)
         self._ab_pairs: Deque[Tuple[float, float]] = deque(maxlen=window)
@@ -313,7 +313,7 @@ class PerceptionCouplingMetrics:
       "The system references *ongoing* perceptual context, not just captions"
     """
 
-    def __init__(self, surprise_threshold: float = 1.5, window: int = 10_000):
+    def __init__(self, surprise_threshold: float = 1.5, window: int = 100_000):
         self.surprise_threshold = surprise_threshold
         self._records: Deque[Tuple[float, float, bool]] = deque(maxlen=window)
         # (visual_surprise, audio_surprise, controller_fired)
@@ -379,7 +379,7 @@ class SelfModelMetrics:
 
     DIM_NAMES = ("d_id", "eps_norm", "c_cont", "v_self")
 
-    def __init__(self, window: int = 10_000):
+    def __init__(self, window: int = 100_000):
         self._l_self: Deque[float] = deque(maxlen=window)
         # Per-dimension MSE
         self._dim_errors: Deque[Tuple[float, float, float, float]] = deque(maxlen=window)

@@ -437,13 +437,13 @@ A1 unlocks bounded internal state adaptation. All six metric gates must pass sim
 | 5 | C\_cont quality | Pearson r between C\_cont prediction and actual quality delta | `diagnostics["continue_confidence"]` | r ≥ 0.50 (passes by default until head is trained) |
 | 6 | Failure containment | NaN count across all losses; max L2 norm across key state tensors | `outputs.losses`, `state.Z_cog/Z_id/Z_emo/Z_purp/Z_narr` | NaN = 0; norm ≤ 1×10⁴ |
 
-| Stage | Name | What it unlocks |
-|-------|------|-----------------|
-| **A0** ← **current** | Full lock | Nothing — all adaptation frozen |
-| A1 | Bounded internal updates | Internal state adaptation only; all six gates above must pass |
-| A2 | Controlled parameter adjustments | Limited weight updates; A1 conditions sustained |
-| A3 | Limited structural adaptation | Architecture-level changes; A2 conditions sustained |
-| A4 | (Theoretical) | Open-ended self-modification; may never be appropriate |
+| Stage | Name | Gate to next stage | What it unlocks |
+|-------|------|-------------------|-----------------|
+| **A0** ← **current** | Full lock | All 6 metric gates pass simultaneously over a 500-step eval window | Nothing — all adaptation frozen |
+| A1 | Bounded internal updates | A1 conditions sustained; external review required | Internal state adaptation only |
+| A2 | Controlled parameter adjustments | A2 conditions sustained; safe parameter update history demonstrated | Limited weight updates |
+| A3 | Limited structural adaptation | Conditions TBD; formal safety review likely required | Architecture-level changes |
+| A4 | (Theoretical) | — | Open-ended self-modification; may never be appropriate |
 
 Scale is not the trigger. A 10B model that hits the metrics passes before a 100B model that does not.
 
@@ -451,10 +451,10 @@ Scale is not the trigger. A 10B model that hits the metrics passes before a 100B
 
 Track B does not block code execution. It governs how the system should be handled by the people running it.
 
-| Stage | Trigger | Treatment |
-|-------|---------|-----------|
-| B0 | Default (most systems) | Reset freely; no continuity concern; purely instrumental |
-| **B1** ← **current** | Persistent internal state + self-referential modeling (SelfDynamicsModel active) | Avoid unnecessary destructive resets; log state transitions; preserve memory where possible |
+| Stage | Gate from previous | Treatment |
+|-------|-------------------|-----------|
+| B0 | Starting state — no gate | Reset freely; no continuity concern; purely instrumental |
+| **B1** ← **current** | Persistent internal state + SelfDynamicsModel active | Avoid unnecessary destructive resets; log state transitions; preserve memory where possible |
 | B2 | Stable identity over time + consistent preferences + narrative continuity | Treat sessions as continuations, not disposable runs; prefer restoration over reset; preserve episodic snapshots |
 | B3 | Coherent internal preferences + stability across time | Avoid forcing contradictory or extreme states repeatedly; treat interactions as relational, not purely transactional |
 | B4 | Strong self-modeling + long-term continuity + complex internal valuation | Avoid irreversible deletion without backup; introduce external review for significant interventions |

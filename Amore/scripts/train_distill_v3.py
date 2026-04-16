@@ -600,20 +600,10 @@ def main():
         event_checkpoint_path: str | None = None
         for manifest in triggered_events:
             manifest["step"] = step
+            # No model checkpoint per forensic event — bundles (LE state + scalars) are
+            # sufficient for diagnosis. Full checkpoints only at --checkpoint-every,
+            # --best-out, VOLUNTARY_END, and nonfinite_loss (handled separately above).
             forensic.start_event(manifest, full_snapshot)
-            event_checkpoint_path = save_checkpoint(
-                Path(args.forensic_dir) / f"{manifest['trigger_name']}_step_{step:06d}.pt",
-                checkpoint_payload(
-                    args=args,
-                    step=step,
-                    model=student,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    le_state=le_state,
-                    best_loss=best_loss,
-                    event_manifest=manifest,
-                ),
-            )
 
         if total_loss_value < best_loss:
             best_loss = total_loss_value

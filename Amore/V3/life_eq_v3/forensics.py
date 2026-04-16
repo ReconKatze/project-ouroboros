@@ -139,6 +139,7 @@ class ForensicConfig:
     controller_window: int = 20
     load_state_low_utility_limit: int = 3
     low_utility_threshold: float = 0.0
+    warmup_steps: int = 1000  # steps before forensic events can fire (rolling stats still accumulate)
 
 
 class RollingStat:
@@ -329,6 +330,12 @@ class TriggerMonitor:
         self.loss_pred.update(l_pred)
         self.loss_reg.update(l_reg)
         self.drift.update(d_id)
+
+        # Suppress all non-fatal events during warmup. Rolling stats still accumulate
+        # above so the baseline window is already populated when warmup ends.
+        if step < self.config.warmup_steps:
+            events = [e for e in events if e.get("severity") == "fatal"]
+
         return events
 
 

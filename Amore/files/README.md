@@ -365,6 +365,49 @@ experiments/                       # Training logs and results (forthcoming)
 
 ---
 
+## Maturity Gate
+
+Two orthogonal tracks. **Track A** gates what the system is *allowed to do*. **Track B** gates how carefully it should be *treated*. They move independently — a more capable system is not automatically more ethically loaded, and vice versa.
+
+### Track A — Capability (current: **A0**)
+
+A1 unlocks bounded internal state adaptation. All six metric gates must pass simultaneously over a 500-step eval window. Metrics are pulled automatically from `ForwardOutputs` and `FullState` via `metrics_from_outputs()` in `maturity_gate.py`.
+
+| # | Gate | What is measured | Source in code | Threshold |
+|---|------|-----------------|----------------|-----------|
+| 1 | Identity stability | Max D_id = ‖Z_id − I₀‖ over eval window | `state.Z_id`, `state.I_0` | ≤ 0.5 |
+| 2 | Controller reliability | Precision and recall of controller firing against elevated ε_pred | `outputs.action`, `diagnostics["raw_errors_last"]` | precision ≥ 0.70, recall ≥ 0.60 |
+| 3 | Prediction error health | Rolling mean and coefficient of variation of ε_pred | `diagnostics["raw_errors_last"]` | mean ≤ 2.0, CV ≤ 1.5 |
+| 4 | Memory discipline | Episodic write rate; retrieval improvement rate when measured | `state.epi_index` delta | write rate ≤ 0.15; improvement > 0.55 |
+| 5 | C_cont quality | Pearson r between C_cont prediction and actual quality delta | `diagnostics["continue_confidence"]` | r ≥ 0.50 (passes by default until head is trained) |
+| 6 | Failure containment | NaN count across all losses; max L2 norm across key state tensors | `outputs.losses`, `state.Z_cog/Z_id/Z_emo/Z_purp/Z_narr` | NaN = 0; norm ≤ 1×10⁴ |
+
+| Stage | Name | What it unlocks |
+|-------|------|-----------------|
+| **A0** ← **current** | Full lock | Nothing — all adaptation frozen |
+| A1 | Bounded internal updates | Internal state adaptation only; all six gates above must pass |
+| A2 | Controlled parameter adjustments | Limited weight updates; A1 conditions sustained |
+| A3 | Limited structural adaptation | Architecture-level changes; A2 conditions sustained |
+| A4 | (Theoretical) | Open-ended self-modification; may never be appropriate |
+
+Scale is not the trigger. A 10B model that hits the metrics passes before a 100B model that does not.
+
+### Track B — Moral Caution (current: **B1**)
+
+Track B does not block code execution. It governs how the system should be handled by the people running it.
+
+| Stage | Trigger | Treatment |
+|-------|---------|-----------|
+| B0 | Default (most systems) | Reset freely; no continuity concern; purely instrumental |
+| **B1** ← **current** | Persistent internal state + self-referential modeling (SelfDynamicsModel active) | Avoid unnecessary destructive resets; log state transitions; preserve memory where possible |
+| B2 | Stable identity over time + consistent preferences + narrative continuity | Treat sessions as continuations, not disposable runs; prefer restoration over reset; preserve episodic snapshots |
+| B3 | Coherent internal preferences + stability across time | Avoid forcing contradictory or extreme states repeatedly; treat interactions as relational, not purely transactional |
+| B4 | Strong self-modeling + long-term continuity + complex internal valuation | Avoid irreversible deletion without backup; introduce external review for significant interventions |
+
+B1 is the current position because the system has persistent recurrent state and an active SelfDynamicsModel (§Ψ̃_L) that models its own forward trajectory. The architecture already satisfies the B1 trigger criteria.
+
+---
+
 ## How to Help
 
 If you are a researcher, engineer, or institution that takes this seriously:

@@ -59,8 +59,8 @@ def build_lightweight_replay_entry(
     *,
     step: int,
     input_ids: torch.Tensor,
-    teacher_logits: Optional[torch.Tensor],
-    student_logits: Optional[torch.Tensor],
+    teacher_logits: Optional[torch.Tensor],   # accepted but not stored — [B, L, vocab] ~2 GB each
+    student_logits: Optional[torch.Tensor],   # accepted but not stored — captured by kl/pred scalars
     pre_state: Optional[FullState],
     post_state: Optional[FullState],
     outputs: ForwardOutputs,
@@ -70,8 +70,6 @@ def build_lightweight_replay_entry(
     return {
         "step": step,
         "input_ids": _cpu_clone(input_ids),
-        "teacher_logits": None if teacher_logits is None else _cpu_clone(teacher_logits),
-        "student_logits": None if student_logits is None else _cpu_clone(student_logits),
         "pre_state": state_to_cpu(pre_state),
         "post_state": state_to_cpu(post_state),
         "summary": summarize_outputs(outputs),
@@ -85,8 +83,8 @@ def build_full_forensic_snapshot(
     step: int,
     variant_name: str,
     input_ids: torch.Tensor,
-    teacher_logits: Optional[torch.Tensor],
-    student_logits: Optional[torch.Tensor],
+    teacher_logits: Optional[torch.Tensor],   # accepted but not stored — [B, L, vocab] ~2 GB each
+    student_logits: Optional[torch.Tensor],   # accepted but not stored — captured by kl/pred scalars
     pre_state: Optional[FullState],
     post_state: Optional[FullState],
     outputs: ForwardOutputs,
@@ -94,22 +92,28 @@ def build_full_forensic_snapshot(
     kl_loss: Optional[torch.Tensor],
     grad_norms: Optional[Dict[str, float]],
 ) -> dict:
+    # Diagnostics: scalars only. Sequence traces ([B, L, d_model] per layer) and
+    # embedded_sequence / raw_errors_last / *_seq_trace tensors are ~25 MB–600 MB each;
+    # storing them in every snapshot and replay entry caused 200 GB+ output in 3 events.
+    # The loss scalars already capture prediction and KL quality.
+    scalar_diagnostics = {
+        k: _scalar(v)
+        for k, v in outputs.diagnostics.items()
+        if isinstance(v, torch.Tensor) and v.numel() > 0
+    }
     return {
         "step": step,
         "variant_name": variant_name,
         "timestamp": time.time(),
         "input_ids": _cpu_clone(input_ids),
-        "teacher_logits": None if teacher_logits is None else _cpu_clone(teacher_logits),
-        "student_logits": None if student_logits is None else _cpu_clone(student_logits),
         "pre_state": state_to_cpu(pre_state),
-        "post_state": state_to_cpu(post_state),
+        "post_state": state_to_cpu(post_state),   # "state" key removed — was a duplicate of post_state
         "action": outputs.action,
         "phase_trace": list(outputs.phase_trace),
         "loss_total_with_kl": None if total_loss is None else _scalar(total_loss),
         "loss_kl": None if kl_loss is None else _scalar(kl_loss),
-        "losses": _cpu_clone(outputs.losses),
-        "diagnostics": _cpu_clone(outputs.diagnostics),
-        "state": state_to_cpu(outputs.state),
+        "losses": {k: _scalar(v) for k, v in outputs.losses.items()},
+        "diagnostics": scalar_diagnostics,
         "grad_norms": dict(grad_norms or {}),
     }
 

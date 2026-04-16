@@ -231,7 +231,10 @@ class LifeEquationModel(nn.Module):
                 social_context=torch.ones((batch, self.config.n_id_heads), device=x.device),
             )
         else:
-            active_identity = torch.zeros((batch, self.config.d_state), device=x.device)
+            # Use the state's batch dim (early_pool.shape[0]), not x.shape[0].
+            # run_ab_eval passes a training-batch state into a single-sample rollout;
+            # torch.cat with mismatched batch dims crashes on the concatenation below.
+            active_identity = torch.zeros((early_pool.shape[0], self.config.d_state), device=x.device)
         if self.profile.enable_purpose:
             conflict = self.purpose_module.conflict(state.Z_purp)
         else:

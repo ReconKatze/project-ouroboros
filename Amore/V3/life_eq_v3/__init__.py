@@ -21,6 +21,7 @@ try:
         snapshot_identity,
     )
     from .model import LifeEquationModel
+    from .modules import SelfDynamicsModel
     from .persistence import StateStore
     from .state import FullState, ManifestEntry, zero_state
 
@@ -35,6 +36,7 @@ try:
             "FullState",
             "LifeEquationModel",
             "ManifestEntry",
+            "SelfDynamicsModel",
             "snapshot_identity",
             "StateStore",
             "zero_state",

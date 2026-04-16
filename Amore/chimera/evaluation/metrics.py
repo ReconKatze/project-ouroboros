@@ -358,7 +358,74 @@ class PerceptionCouplingMetrics:
 
 
 # ─────────────────────────────────────────────────────────────────────────── #
-# 6. Aggregated evaluation report                                             #
+# 6. Self-dynamics model metrics                                               #
+# ─────────────────────────────────────────────────────────────────────────── #
+
+class SelfModelMetrics:
+    """
+    Tracks SelfDynamicsModel (§Ψ̃_L) prediction quality over training.
+
+    Four prediction dimensions (matching SelfDynamicsModel.SUMMARY_DIM):
+      0: d_id      — identity drift
+      1: eps_norm  — prediction error norm
+      2: c_cont    — continuation confidence
+      3: v_self    — viability
+
+    Key questions:
+      - Is L_self_model actually decreasing? (model is learning its own dynamics)
+      - Which dimension is hardest to predict? (reveals what is most chaotic)
+      - How often does V_self augmentation reduce V_self? (forward-looking pessimism active)
+    """
+
+    DIM_NAMES = ("d_id", "eps_norm", "c_cont", "v_self")
+
+    def __init__(self, window: int = 500):
+        self._l_self: Deque[float] = deque(maxlen=window)
+        # Per-dimension MSE
+        self._dim_errors: Deque[Tuple[float, float, float, float]] = deque(maxlen=window)
+        # Count of steps where V_self augmentation reduced V_self (pessimism active)
+        self._pessimism_active: Deque[bool] = deque(maxlen=window)
+
+    def record(
+        self,
+        l_self: float,
+        pred: Optional[Tuple[float, float, float, float]] = None,   # predicted (d_id, eps, c_cont, v_self)
+        actual: Optional[Tuple[float, float, float, float]] = None, # actual (d_id, eps, c_cont, v_self)
+        v_self_augmented: Optional[bool] = None,  # True if SDM prediction reduced V_self this step
+    ) -> None:
+        self._l_self.append(l_self)
+        if pred is not None and actual is not None:
+            self._dim_errors.append(tuple((p - a) ** 2 for p, a in zip(pred, actual)))
+        if v_self_augmented is not None:
+            self._pessimism_active.append(v_self_augmented)
+
+    def summary(self) -> Dict:
+        if not self._l_self:
+            return {"status": "no_data"}
+        values = list(self._l_self)
+        result: Dict = {
+            "l_self_mean": sum(values) / len(values),
+            "l_self_recent": sum(values[-50:]) / max(len(values[-50:]), 1),
+            "n_steps": len(values),
+        }
+        # Trend (last quarter vs first quarter)
+        q = max(1, len(values) // 4)
+        result["l_self_trend"] = "improving" if sum(values[-q:]) / q < sum(values[:q]) / q else "stagnant"
+
+        if self._dim_errors:
+            errors = list(self._dim_errors)
+            for i, name in enumerate(self.DIM_NAMES):
+                mse = sum(e[i] for e in errors) / len(errors)
+                result[f"mse_{name}"] = mse
+
+        if self._pessimism_active:
+            result["pessimism_active_rate"] = sum(self._pessimism_active) / len(self._pessimism_active)
+
+        return result
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# 7. Aggregated evaluation report                                             #
 # ─────────────────────────────────────────────────────────────────────────── #
 
 @dataclass
@@ -368,6 +435,7 @@ class EvaluationReport:
     memory: Dict
     c_cont: Dict
     perception_coupling: Dict
+    self_model: Dict = field(default_factory=dict)
     step: int = 0
     notes: List[str] = field(default_factory=list)
 
@@ -413,6 +481,17 @@ class EvaluationReport:
         else:
             lines.append(f"  Coupling rate={pc.get('coupling_rate', 0):.3f}  False alarm={pc.get('false_alarm_rate', 0):.3f}")
 
+        if self.self_model and self.self_model.get("status") != "no_data":
+            lines.append("\n[Self-Dynamics Model §Ψ̃_L]")
+            sm = self.self_model
+            lines.append(f"  L_self mean={sm.get('l_self_mean', 0):.4f}  recent={sm.get('l_self_recent', 0):.4f}  trend={sm.get('l_self_trend', '?')}")
+            for dim in SelfModelMetrics.DIM_NAMES:
+                key = f"mse_{dim}"
+                if key in sm:
+                    lines.append(f"    {dim} MSE={sm[key]:.4f}")
+            if "pessimism_active_rate" in sm:
+                lines.append(f"  V_self pessimism active {sm['pessimism_active_rate']:.1%} of steps")
+
         if self.notes:
             lines.append("\n[Notes]")
             for n in self.notes:
@@ -428,6 +507,7 @@ def build_evaluation_report(
     memory_metrics: MemoryMetrics,
     c_cont_metrics: CContMetrics,
     perception_metrics: PerceptionCouplingMetrics,
+    self_model_metrics: Optional["SelfModelMetrics"] = None,
 ) -> EvaluationReport:
     """Snapshot all trackers into a single report."""
     notes = []
@@ -442,6 +522,12 @@ def build_evaluation_report(
     if not mem_summary.get("write_rate_ok", True):
         notes.append(f"Memory write rate {mem_summary.get('write_rate', 0):.1%} exceeds 15% — risk of noise writes.")
 
+    sm_summary: Dict = {}
+    if self_model_metrics is not None:
+        sm_summary = self_model_metrics.summary()
+        if sm_summary.get("l_self_trend") == "stagnant" and sm_summary.get("n_steps", 0) > 200:
+            notes.append("SelfDynamicsModel L_self not improving after 200 steps — check warmup or d_sdm.")
+
     return EvaluationReport(
         step=step,
         identity_drift=drift_tracker.summary(),
@@ -449,5 +535,6 @@ def build_evaluation_report(
         memory=mem_summary,
         c_cont=c_cont_metrics.summary(),
         perception_coupling=perception_metrics.summary(),
+        self_model=sm_summary,
         notes=notes,
     )

@@ -50,6 +50,10 @@ class FullState:
     steps_since_last_action: int = 0
     epi_index: int = 0
     Z_mat_age: int = 0  # per-lifetime step counter for Z_mat; resets with state on VOLUNTARY_END
+    # §Ψ̃_L SelfDynamicsModel persistent state (None when loading pre-SDM checkpoints)
+    Z_sdm: Optional[torch.Tensor] = None       # [B, d_sdm] — GRU hidden state
+    Z_sdm_pred: Optional[torch.Tensor] = None  # [B, 4] — predicted (d_id, eps, c_cont, v_self) for t
+    prev_action_idx: int = 0                    # index of action taken at t-1 (ControllerModule.ACTIONS)
 
     def clone(self) -> "FullState":
         return FullState(
@@ -82,6 +86,9 @@ class FullState:
             steps_since_last_action=self.steps_since_last_action,
             epi_index=self.epi_index,
             Z_mat_age=self.Z_mat_age,
+            Z_sdm=None if self.Z_sdm is None else self.Z_sdm.clone(),
+            Z_sdm_pred=None if self.Z_sdm_pred is None else self.Z_sdm_pred.clone(),
+            prev_action_idx=self.prev_action_idx,
         )
 
 
@@ -142,6 +149,9 @@ def zero_state(
         I_0=i0,
         Z_values=z_values,
         alpha_0=a0,
+        Z_sdm=_zeros(batch_size, config.d_sdm, config=config),
+        Z_sdm_pred=_zeros(batch_size, 4, config=config),
+        prev_action_idx=0,
     )
     return state
 

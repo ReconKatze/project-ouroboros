@@ -702,3 +702,123 @@ class ViabilityModule(nn.Module):
         # drifting to their max ceiling (w_eps_v=10 × eps_chronic=10 = -100) fed into
         # the controller as extreme out-of-range signals before the onset fix.
         return v_self.clamp(min=-10.0, max=10.0), l_transition  # [B, 1], scalar
+
+
+class SelfDynamicsModel(nn.Module):
+    """§Ψ̃_L fully realized: GRU autoregressive self-monitoring trajectory model.
+
+    Replaces the one-step linear stub in ViabilityModule with a genuine forward model
+    that tracks its own state trajectory over time.
+
+    Predicts the trajectory of 4 key self-monitoring scalars per step:
+      dim 0: d_id      — identity drift  (from IdentityModule.drift)
+      dim 1: eps_norm  — Z_eps norm      (from PredictionErrorModule)
+      dim 2: c_cont    — continuation confidence (from ControllerModule)
+      dim 3: v_self    — viability estimate  (from ViabilityModule)
+
+    Per training step t:
+      1. GRU input: (summary_{t-1} [4] + action_embed_{t-1} [4]) — what happened last step
+      2. GRU hidden: Z_sdm [B, d_sdm] — accumulated trajectory context
+      3. Output: pred_t [B, 4] — predictions for current step t
+      4. L_self = MSE(pred_t, actual_t) — trains on its own next-state prediction error
+
+    Integration with V_self (pessimism principle):
+      At step t, before the controller fires, V_self is augmented:
+        v_self_t = min(v_self_t, state.Z_sdm_pred[:, 3])
+      where Z_sdm_pred contains the prediction for t made at t-1.
+      This makes the controller and Δ_vol gate forward-looking: a trajectory that is
+      about to degrade triggers action before the degradation is fully instantaneous.
+
+    K-step lookahead for evaluation / deployment:
+      lookahead(summary, h, k, action_idx) unrolls K GRU steps under a candidate
+      action then CONTINUE, returning the full predicted trajectory.  Used by
+      chimera/evaluation/runner.py and, at deployment, by the [THINK] window.
+
+    Gradient isolation (§0.5 Convention 2):
+      All inputs are detached. L_self trains only SelfDynamicsModel parameters.
+      No gradient flows back into Mamba, identity, viability, or controller.
+    """
+
+    SUMMARY_DIM = 4    # d_id, eps_norm, c_cont, v_self
+    N_ACTIONS   = 4    # matches ControllerModule.ACTIONS cardinality
+
+    def __init__(self, config: LifeEquationConfig):
+        super().__init__()
+        self.config = config
+        # Learned action embedding: gives the GRU a distinct embedding per action
+        # so it can learn that LOAD_STATE resets drift while CONTINUE accumulates it.
+        self.action_embed = nn.Embedding(self.N_ACTIONS, self.N_ACTIONS)
+        gru_in = self.SUMMARY_DIM + self.N_ACTIONS
+        self.gru = nn.GRUCell(gru_in, config.d_sdm)
+        # Prediction head: map GRU hidden → next-step scalar estimates
+        self.pred_head = nn.Linear(config.d_sdm, self.SUMMARY_DIM)
+
+    def _pack_input(self, summary: torch.Tensor, action_idx: int) -> torch.Tensor:
+        """[B, 4+4] — summary scalars + action embedding."""
+        batch = summary.shape[0]
+        act = torch.full((batch,), action_idx, dtype=torch.long, device=summary.device)
+        act_emb = self.action_embed(act)                      # [B, N_ACTIONS]
+        return torch.cat([summary, act_emb], dim=-1)          # [B, 8]
+
+    def step(
+        self,
+        summary: torch.Tensor,   # [B, 4]
+        action_idx: int,
+        h: torch.Tensor,         # [B, d_sdm]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Single GRU step. Returns (pred_next [B, 4], h_next [B, d_sdm])."""
+        x = self._pack_input(summary, action_idx)
+        h_next = self.gru(x, h)
+        pred_next = self.pred_head(h_next)
+        return pred_next, h_next
+
+    def lookahead(
+        self,
+        summary: torch.Tensor,       # [B, 4] — current actual summary, already detached
+        h: torch.Tensor,             # [B, d_sdm] — current GRU hidden, already detached
+        k: int,
+        action_idx_step0: int = 0,   # action for step 0 (0 = CONTINUE)
+    ) -> List[torch.Tensor]:
+        """Unroll K steps from current state under candidate action.
+
+        Steps 1..K-1 assume CONTINUE (idx=0) — lookahead simulates "what if I keep going."
+        Returns list of K predicted [B, 4] tensors.
+        All computation is torch.no_grad().
+        """
+        preds: List[torch.Tensor] = []
+        s = summary.detach()
+        h_curr = h.detach()
+        with torch.no_grad():
+            for i in range(k):
+                a = action_idx_step0 if i == 0 else 0   # 0 = CONTINUE
+                pred, h_curr = self.step(s, a, h_curr)
+                preds.append(pred)
+                s = pred
+        return preds
+
+    def forward(
+        self,
+        summary_t: torch.Tensor,    # [B, 4] — current actuals (detached upstream)
+        prev_pred: torch.Tensor,    # [B, 4] — predictions made at t-1 (state.Z_sdm_pred)
+        action_idx: int,            # action taken at t-1 (state.prev_action_idx)
+        h_prev: torch.Tensor,       # [B, d_sdm] — GRU hidden from previous step
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Per-training-step update.
+
+        Returns:
+            pred_next [B, 4]  — predictions for t+1 (store in state.Z_sdm_pred)
+            h_next    [B, d_sdm] — updated GRU hidden (store in state.Z_sdm)
+            l_self    scalar  — L_self = MSE(prev_pred, summary_t)
+        """
+        # L_self: compare t-1 predictions to current actuals.
+        # Zero on first step of lifetime (prev_pred=zeros from zero_state) so we don't
+        # penalise random initialisation before the GRU has seen any real trajectory.
+        has_prev = (prev_pred.detach().abs().sum() > 1e-6).float()
+        l_self = has_prev * F.mse_loss(prev_pred, summary_t.detach())
+
+        # GRU step: input = (t-1 actuals, t-1 action) → pred_t+1, h_t
+        # We feed summary_t as the "observed outcome" the GRU conditions on,
+        # with the action that was taken to arrive here.
+        pred_next, h_next = self.step(summary_t.detach(), action_idx, h_prev.detach())
+
+        return pred_next, h_next, l_self

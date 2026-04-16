@@ -32,6 +32,11 @@ class VariantProfile:
     # toward I_0 strongly before the anchor is snapshotted.
     # After snapshot, default (0.1) is sufficient — gamma_eff handles the decay.
     lambda_identity: Optional[float] = None
+    # §Ψ̃_L SelfDynamicsModel: GRU trajectory predictor over (d_id, eps, c_cont, v_self).
+    # Disabled by default; enable in Round 3+ variants where controller foresight matters.
+    # When enabled: V_self is augmented pessimistically by the prev-step prediction,
+    # making the controller and Δ_vol gate forward-looking rather than reactive.
+    enable_self_dynamics: bool = False
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,7 @@ class LifeEquationConfig:
         "mamba_to_attention_policy",
         "z_values_reflect",   # v15: phi_reflect reads Z_cog via detached pool
         "v_future",           # v15: ViabilityModule forward estimate
+        "sdm_summary_input",  # SelfDynamicsModel reads (d_id, eps_norm, c_cont, v_self) detached
     )
     warmup_modules: Tuple[str, ...] = ("attention_gain", "friction", "emotion_broadcast")
     homeostasis_set_point: Tuple[float, ...] = (1.0, 0.5, 0.0, 0.0, 1.0)
@@ -209,6 +215,10 @@ class LifeEquationConfig:
     # (no cultural signal) or drifting unboundedly. Only active when enable_social_relational
     # is True so it never fires in phases where z_culture is zeroed out in the forward pass.
     lambda_culture_reg: float = 1e-3
+    # §Ψ̃_L SelfDynamicsModel hyperparameters
+    d_sdm: int = 128                 # GRU hidden size (small — input is only 8 scalars)
+    lambda_self_model: float = 0.05  # L_self_model weight in L_total
+    sdm_lookahead_k: int = 5         # K-step lookahead in evaluation / [THINK] window
     model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (28, 24, 48, 64, 14))
     variant_profile: Optional[VariantProfile] = None
 

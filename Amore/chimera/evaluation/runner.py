@@ -58,6 +58,7 @@ from chimera.evaluation.metrics import (
     MemoryMetrics,
     CContMetrics,
     PerceptionCouplingMetrics,
+    SelfModelMetrics,
     EvaluationReport,
     build_evaluation_report,
 )
@@ -151,6 +152,7 @@ class EvalRunner:
         self.memory = MemoryMetrics(window=maturity_window)
         self.c_cont = CContMetrics(window=maturity_window // 2)
         self.perception = PerceptionCouplingMetrics(window=maturity_window)
+        self.self_model = SelfModelMetrics(window=maturity_window)
 
     # ------------------------------------------------------------------ #
     # 1. Per-step recording (cheap — called every training step)          #
@@ -208,6 +210,12 @@ class EvalRunner:
 
         # C_cont (prediction only; actual quality from A/B)
         self.c_cont.record_prediction(c_cont_pred=m.c_cont_pred)
+
+        # SelfDynamicsModel: record L_self and per-dimension predictions if available
+        diag = outputs.diagnostics or {}
+        l_self = diag.get("sdm_l_self")
+        if l_self is not None:
+            self.self_model.record(l_self=float(l_self.item() if hasattr(l_self, "item") else l_self))
 
     # ------------------------------------------------------------------ #
     # 2. A/B rollout evaluation                                            #
@@ -416,6 +424,7 @@ class EvalRunner:
             memory_metrics=self.memory,
             c_cont_metrics=self.c_cont,
             perception_metrics=self.perception,
+            self_model_metrics=self.self_model,
         )
         return maturity_report, eval_report
 

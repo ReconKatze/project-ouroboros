@@ -21,6 +21,7 @@ from .modules import (
     Mamba3Block,
     PredictionErrorModule,
     PurposeModule,
+    SelfDynamicsModel,
     TemporalModule,
     ValueDynamicsModule,
     ViabilityModule,
@@ -92,6 +93,10 @@ class LifeEquationModel(nn.Module):
         self.viability_module = ViabilityModule(self.config)
         # §31 Λ: episodic memory (write projections + soft-attention read)
         self.epi_module = EpisodicMemoryModule(self.config)
+        # §Ψ̃_L SelfDynamicsModel: GRU trajectory predictor over self-monitoring scalars.
+        # Always instantiated (parameters are cheap: ~d_sdm² + 8*d_sdm).
+        # Active only when profile.enable_self_dynamics=True.
+        self.self_dynamics = SelfDynamicsModel(self.config)
         self.store = StateStore(self.config, root_dir=state_store_dir)
 
     def _zeros(self, batch: int, width: int, device: torch.device) -> torch.Tensor:
@@ -408,6 +413,16 @@ class LifeEquationModel(nn.Module):
             v_self = torch.zeros((batch, 1), device=x.device)
             l_transition = torch.tensor(0.0, device=x.device)
 
+        # §Ψ̃_L pessimism: before the controller fires, augment V_self with the prediction
+        # made by SelfDynamicsModel at the PREVIOUS step (stored in state.Z_sdm_pred).
+        # On step 1 of a lifetime (Z_mat_age==0) the prediction is all-zeros — skip.
+        # This makes V_self forward-looking: a declining trajectory triggers action
+        # one step earlier than instantaneous monitoring alone.
+        if self.profile.enable_self_dynamics and state.Z_mat_age > 0:
+            if state.Z_sdm_pred is not None:
+                v_self_pred_t = state.Z_sdm_pred[:, 3:4].detach().to(x.device).clamp(min=-10.0, max=10.0)
+                v_self = torch.min(v_self, v_self_pred_t)
+
         phase_trace.append("controller_check")
         action, trigger, fire, utility, c_cont, u_t = self._controller_step(
             state=state,
@@ -441,6 +456,29 @@ class LifeEquationModel(nn.Module):
                     phase_trace=phase_trace,
                     action="VOLUNTARY_END",
                 )
+
+        # §Ψ̃_L SelfDynamicsModel update — runs every non-VOLUNTARY_END step.
+        # Build summary from current-step actuals (all detached — gradient isolation).
+        # Initialize Z_sdm/Z_sdm_pred if None (loading from a pre-SDM checkpoint).
+        l_self = torch.tensor(0.0, device=x.device)
+        if self.profile.enable_self_dynamics:
+            if state.Z_sdm is None:
+                state.Z_sdm = torch.zeros((batch, self.config.d_sdm), device=x.device)
+            if state.Z_sdm_pred is None:
+                state.Z_sdm_pred = torch.zeros((batch, 4), device=x.device)
+            eps_norm_sdm = state.Z_eps.norm(dim=-1, keepdim=True).detach().clamp(max=10.0)
+            summary_t = torch.cat(
+                [d_id.detach(), eps_norm_sdm, c_cont.detach(), v_self.detach()], dim=-1
+            )  # [B, 4]
+            sdm_pred_next, sdm_h_next, l_self = self.self_dynamics(
+                summary_t=summary_t,
+                prev_pred=state.Z_sdm_pred.to(x.device),
+                action_idx=state.prev_action_idx,
+                h_prev=state.Z_sdm.to(x.device),
+            )
+            state.Z_sdm = sdm_h_next
+            state.Z_sdm_pred = sdm_pred_next
+            state.prev_action_idx = ControllerModule.ACTIONS.index(action)
 
         output_with_pred = layer_input + pred_seqs[-1][:, -1, :].detach()
         logits = self.output_head(output_with_pred)
@@ -485,6 +523,9 @@ class LifeEquationModel(nn.Module):
             losses["L_sde"] = (raw_errors_tensor.pow(2).mean()) * self.config.lambda_pred
         else:
             losses["L_sde"] = torch.tensor(0.0, device=x.device)
+        # §Ψ̃_L: L_self_model trains the GRU to predict its own next-step scalar summaries.
+        # Only live when enable_self_dynamics=True; l_self is already 0.0 otherwise.
+        losses["L_self_model"] = self.config.lambda_self_model * l_self
         # L2 on z_culture: only when social_relational is active (z_culture is live).
         # Prevents the parameter from stalling at zero or drifting unboundedly.
         # Gated here so it never fires in phases where z_culture is zeroed in the forward pass.
@@ -495,6 +536,7 @@ class LifeEquationModel(nn.Module):
         losses["L_total"] = (
             losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"]
             + losses["L_reg"] + losses["L_transition"] + losses["L_sde"] + losses["L_culture_reg"]
+            + losses["L_self_model"]
         )
         diagnostics["boredom"] = boredom
         diagnostics["friction"] = friction
@@ -510,6 +552,9 @@ class LifeEquationModel(nn.Module):
         diagnostics["mu_val"] = mu_val
         diagnostics["variant_controller_mode"] = self.embed.weight.new_tensor([float(("disabled", "passive", "offline", "live").index(self.profile.controller_mode))])
         diagnostics["layer_input"] = layer_input.detach()   # threaded to next step as prev_layer_input
+        if self.profile.enable_self_dynamics and state.Z_sdm_pred is not None:
+            diagnostics["sdm_pred_next"] = state.Z_sdm_pred.detach()    # [B, 4]: predictions for t+1
+            diagnostics["sdm_l_self"] = l_self.detach() if hasattr(l_self, "detach") else torch.tensor(float(l_self), device=x.device)
         diagnostics["gated_error_trace"] = gated_error_trace
         diagnostics["effective_seq_trace"] = effective_seq_trace
         diagnostics["raw_mamba_out_trace"] = raw_mamba_out_trace

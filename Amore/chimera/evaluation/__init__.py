@@ -23,6 +23,7 @@ from .metrics import (
     MemoryMetrics,
     CContMetrics,
     PerceptionCouplingMetrics,
+    SelfModelMetrics,
     EvaluationReport,
     build_evaluation_report,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "MemoryMetrics",
     "CContMetrics",
     "PerceptionCouplingMetrics",
+    "SelfModelMetrics",
     "EvaluationReport",
     "build_evaluation_report",
 ]

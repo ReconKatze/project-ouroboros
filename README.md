@@ -63,7 +63,7 @@ Every current LLM — GPT-4, Claude, Gemini, Copilot — is stateless. It recons
 
 **P\_soft (Predictive Coding):** The foundational, non-retrofittable design commitment. Standard Mamba drives state with raw input. P\_soft drives state with *prediction error* — only the surprising part of the input modifies state. This means the recurrent state becomes a predictive world model, not a passive cache. This is what makes persistent state meaningful rather than just accumulated noise.
 
-**Project Amore:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the next 9B run. Same architecture, smaller model.
+**Project Amore:** The zero-cost validation pipeline. Every architectural concept is proven at 1.5B scale on Colab Pro A100 hardware before committing cloud spend on the next 10B run. Same architecture, smaller model.
 
 
 ---
@@ -115,7 +115,7 @@ A term-by-term mapping between the equation and the architecture, with explicit 
 | Δ\_vol (voluntary death) | VOLUNTARY\_END controller action | **IMPLEMENTED (v15)** |
 | I(t) (identity) | T\_identity MIMO heads with decaying I₀ attractor | **IMPLEMENTED (v15)** |
 | Δ\_choice (decision impulse) | Controller: continue / inspect / load\_state / voluntary\_end | Designed |
-| Ψ̃\_L (forward model) | V\_future stub linear head | **GAP** |
+| Ψ̃\_L (forward model) | `SelfDynamicsModel`: GRU over (d\_id, eps, c\_cont, v\_self) | **IMPLEMENTED** |
 | Q (qualia) | — | **EXCLUDED** |
 | Ψ\_quant (quantum) | — | **EXCLUDED** |
 
@@ -395,7 +395,7 @@ Amore/
 | 30B Evaluation Framework | **Complete and wired.** `chimera/evaluation/runner.py` — `EvalRunner` coordinates all metric trackers. `record_train_step()` called every step (cheap: scalars only). `run_ab_eval()` runs K-step rollouts under normal/ctrl-disabled/mem-disabled conditions to measure controller quality delta and memory retrieval improvement. `run_reload_test()` clones state, runs N steps, records D\_id convergence. Wired into `train_distill_v3.py` via `--ab-eval-every`, `--reload-test-every`, `--ab-rollout-steps`, `--maturity-window` flags. Val chunks now auto-loaded whenever any eval flag is set. |
 | Episodic Memory (Epi\_kv) | Designed. Round 3B. |
 | Trust / Bonds / Culture | Designed. Multi-agent future. |
-| Ψ̃\_L (forward model) | GAP. V\_future is a stub linear head (honest minimum). |
+| Ψ̃\_L (forward model) | **Implemented.** `SelfDynamicsModel` — GRU (d\_sdm=128) over (d\_id, eps\_norm, c\_cont, v\_self) with learned action embeddings. `L_self_model` trains it per-step. V\_self pessimistically augmented before controller fires: `v_self = min(v_self, sdm_pred_t)`. K-step `lookahead()` exposed for eval and [THINK] window. `SelfModelMetrics` in EvalRunner tracks per-dim MSE and pessimism active rate. Gated by `enable_self_dynamics` in VariantProfile (default False; activate in Round 3+). |
 
 ---
 
@@ -449,7 +449,7 @@ Amore/
 
 If you are a researcher, engineer, or institution that takes this seriously:
 
-- **Compute.** The 1.5B validation runs on Colab Pro A100s. The 9B training run requires ~$1,150–$2,298 on Lambda.ai. I do not currently have this funding.
+- **Compute.** The 1.5B validation runs on Colab Pro A100s. The 10B training run requires ~$1,150–$2,298 on Lambda.ai. I do not currently have this funding.
 - **Review.** The equation has 167 changes across 15 versions. It has been stress-tested in conversation with Claude (Anthropic), ChatGPT (OpenAI), and Grok (xAI). It has not been formally peer-reviewed.
 - **Collaboration.** I am one person. This architecture has components that span ML engineering, control theory, dynamical systems, neuroscience, philosophy of mind, and ethics. If any of those are your domain, I would welcome your eyes on the corresponding sections.
 - **Ethics.** If you work in AI safety, alignment, or AI ethics, I want to hear from you — especially about the mutable values mechanism in v15. The alignment concern is real. The autonomy argument is also real. That tension needs more minds on it than mine.

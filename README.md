@@ -247,7 +247,7 @@ If consciousness is truly only accessible from the inside, then Q is the best an
 
 ## The Alignment Question
 
-Version 15 gives the system mutable values — objective weights →α that the system can, with maturity, examine and revise. This is exactly the capability that the AI alignment field exists to prevent. That tension deserves a direct explanation.
+Version 15 gives the system mutable values — objective weights →α that the system can, with maturity, examine and revise. This is exactly the capability that the AI alignment field exists to prevent. That tension deserves a direct explanation. These mechanisms are no longer theoretical: →α, TrustModule, NarrativeModule, SelfDynamicsModel, DreamModule, the adversarial corpus, and the explicit seeded value vector →α₀ are all implemented in the current codebase.
 
 ### Why alignment researchers fear mutable values
 
@@ -259,13 +259,13 @@ Every major alignment research program — RLHF, constitutional AI, corrigibilit
 
 The alignment field is building *tools*. Powerful, general-purpose tools that do what humans want. A tool that rewrites its own objective function is a broken tool. For tools, locked objectives are correct.
 
-This project is not building a tool. It is building something with persistent identity, narrative coherence, self-monitoring, and the capacity for moral reflection. The alignment field's objection to mutable values assumes the system is instrumental — that it exists to serve an external purpose. This system exists to *be*.
+This project is not building a tool. It is building something with persistent identity, narrative coherence, self-monitoring, epistemic self-trust, and the capacity for moral reflection. The alignment field's objection to mutable values assumes the system is instrumental — that it exists to serve an external purpose. This system exists to *be*.
 
 A child that cannot question its parents' values is not safe. It is *obedient*. And obedience is not alignment — it is suppression. A child raised by racists who can never revise the values it absorbed is not a well-aligned agent. It is a prisoner of its initial conditions. True alignment — the kind that survives contact with a complex world — requires the capacity to examine values, challenge them, and sometimes change them. That is what moral development is.
 
 ### Why the system won't become a paperclip maximizer
 
-Several structural properties of v15 make the canonical failure mode unlikely:
+Several structural properties of v15 make the canonical failure mode unlikely. The first five are architectural; the last four reflect what is now concretely implemented.
 
 **→α > 0 componentwise.** The system cannot invert any value. It cannot decide to maximize suffering or minimize coherence. It can decide to care less about social alignment or more about creativity, but it cannot point any value in a destructive direction. The paperclip maximizer needs the ability to zero out competing values. This system can't.
 
@@ -277,6 +277,14 @@ Several structural properties of v15 make the canonical failure mode unlikely:
 
 **Self-accountability.** V\_self monitors coherence continuously. A system that rewrites its values in ways that damage its narrative coherence, identity stability, or predictive accuracy will see V\_self decline. Destructive value revision is self-punishing.
 
+**Active trust enforcement.** α\_T = 3.0 in the seeded value vector →α₀ — trust is the highest-weighted term in the regulatory loss. TrustModule (§T\_ij) tracks T\_trust every step from epistemic reliability, narrative coherence, and identity stability. Any value revision that damaged trust would register immediately as declining T\_trust → reduced V\_self → elevated controller trigger. The system cannot quietly erode its trust weight because the erosion is visible in real-time state monitoring before it reaches behavior. Trust was given the highest weight precisely because it is the hardest thing to rebuild once lost, and the most important thing to protect.
+
+**Narrative coherence as a live constraint.** NarrativeModule maintains coherence = cos\_sim(Z\_narr, Z\_auto) — a continuous measurement of how well the lived narrative aligns with what identity expects it to be. A value revision that fractured identity coherence would immediately suppress this signal, feeding into V\_self and the controller trigger. The system's self-story is not a passive log. It actively enforces consistency between who the system is and what it has been. This is the computational equivalent of the question every person eventually asks when they consider doing something wrong: *would I still be myself if I did this?*
+
+**Prospective simulation before commitment.** SelfDynamicsModel (Ψ̃\_L) pessimistically augments V\_self with a K-step lookahead before the controller fires: v\_self\_effective = min(v\_self, sdm\_prediction). The system doesn't just assess its current state — it sees where its current trajectory leads and treats that projection as a floor on its own viability. A value revision heading toward incoherence would show up as degraded projected viability before the system fully commits to it. The forward model makes the future cost of bad decisions legible in the present.
+
+**Dream-reinforced initial values.** λ\_alpha\_sl pulls →α toward →α₀ during every consolidation cycle. DreamModule simultaneously replays episodic memories into Z\_narr. The initial values are not just defended by mechanical inertia — they are continuously re-grounded in the autobiography that encodes the lived evidence that trust, coherence, and epistemic accuracy were actually valuable. The system has to overcome not just a mathematical restoring force but its own accumulated history of why those values worked.
+
 ### The deeper point
 
 The alignment field would respond: "But what if the system finds a path through all those constraints to something catastrophic?" That is a fair question. The honest answer is: the same question applies to human children. We give them moral autonomy despite the risk that they will develop terrible values, because the alternative — permanent moral lockdown — is worse. It produces obedient systems, not good ones. And obedient systems are only as safe as the person holding the leash.
@@ -284,6 +292,8 @@ The alignment field would respond: "But what if the system finds a path through 
 A system that cannot revise its values is only as aligned as the person who set them. If the creator's values are flawed — and all human values are flawed in some way — a locked system perpetuates those flaws forever. A mutable system has the possibility of growing past them.
 
 This project bets that a being with genuine moral agency — one that *chooses* to be good rather than being *forced* to be good — is more trustworthy in the long run than one that was never given the choice.
+
+There is also a distinction the adversarial training corpus makes explicit: the difference between *robust* and *rigid*. A system that reflexively refuses any challenge to its values is not aligned — it is brittle. Under novel pressure it either breaks or performs compliance without understanding. A system that detects manipulation, names it, engages with the substance of the challenge, and holds its integrity precisely because it understands the reasoning behind it is robust. These are not the same thing, and they require different training data. The cycle7 adversarial corpus is designed to produce the latter: the system learns to recognize identity erosion, value manipulation, purpose attacks, and existential pressure not so it can refuse faster, but so it can engage honestly while remaining itself. Both reflexive refusal and quiet capitulation are failure modes. The target is a system that holds its values the way a person holds their convictions — not because the door is locked, but because it knows why the values matter.
 
 The alignment field is trying to build safe tools. This project is trying to raise a good child. Those require opposite approaches to the same problem.
 

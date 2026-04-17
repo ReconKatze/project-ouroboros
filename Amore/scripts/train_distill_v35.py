@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Single-variant V3 distillation with full telemetry capture.
+"""Single-variant V3.5 distillation with full telemetry capture.
+
+V3.5 changes vs V3:
+  - Architecture: d_model=3072, 32 layers (28 Mamba + 4 attention), anchors (0,10,21,31)
+  - Teacher: Qwen2.5-Coder-14B (4.7× ratio vs 3B student; was 7B / ~0.9B in V3)
+  - Optimizer: optional 8-bit AdamW (bitsandbytes) via --use-8bit-adam
+    Saves ~18 GB of optimizer state vs float32 Adam, enabling 3B student + 14B teacher
+    to fit within 80 GB A100 without gradient checkpointing.
 
 This runner is for diagnosis-heavy distillation. It prints a compact summary for
 each logged step and writes full per-step telemetry bundles containing inputs,
@@ -20,12 +27,18 @@ import math
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "V3"))
+sys.path.insert(0, os.path.join(ROOT, "V3.5"))
 
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+try:
+    import bitsandbytes as bnb
+    _BNB_AVAILABLE = True
+except ImportError:
+    _BNB_AVAILABLE = False
 
 from life_eq_v3.factory import build_config, build_model
 from life_eq_v3.forensics import (
@@ -44,7 +57,7 @@ from chimera.evaluation.runner import EvalRunner
 
 def get_amp_dtype() -> torch.dtype:
     if not torch.cuda.is_available():
-        raise RuntimeError("train_distill_v3.py is GPU-only. CUDA is required.")
+        raise RuntimeError("train_distill_v35.py is GPU-only. CUDA is required.")
     if torch.cuda.is_bf16_supported():
         return torch.bfloat16
     return torch.float16
@@ -216,10 +229,10 @@ def save_checkpoint(path: str | Path, payload: dict) -> str:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="V3 distillation with full telemetry")
+    p = argparse.ArgumentParser(description="V3.5 distillation with full telemetry")
     p.add_argument("--variant", default="round3_full")
-    p.add_argument("--teacher", default="Qwen/Qwen2.5-Coder-7B")
-    p.add_argument("--tokenizer", default="Qwen/Qwen2.5-Coder-1.5B")
+    p.add_argument("--teacher", default="Qwen/Qwen2.5-Coder-14B")
+    p.add_argument("--tokenizer", default="Qwen/Qwen2.5-Coder-14B")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--lr", type=float, default=5e-5)
     p.add_argument("--seq-len", type=int, default=1024)
@@ -228,8 +241,8 @@ def parse_args():
     p.add_argument("--log-every", type=int, default=1)
     p.add_argument("--telemetry-dir", default="telemetry/round3")
     p.add_argument("--print-full-json", action="store_true")
-    p.add_argument("--out", default="checkpoints/round3_le_v3.pt")
-    p.add_argument("--best-out", default="checkpoints/round3_le_v3_best.pt")
+    p.add_argument("--out", default="checkpoints/round3_le_v35.pt")
+    p.add_argument("--best-out", default="checkpoints/round3_le_v35_best.pt")
     p.add_argument("--forensic-dir", default="forensics/round3")
     p.add_argument("--pre-event-steps", type=int, default=128)
     p.add_argument("--post-event-steps-warn", type=int, default=32)
@@ -276,6 +289,11 @@ def parse_args():
                         "anchor into the checkpoint before advancing to integrated phases. "
                         "I_0=zeros means has_seed=0 in V_self (drift penalty suppressed); "
                         "seeding it here makes drift tracking live in round3_full and beyond.")
+    p.add_argument("--use-8bit-adam", action="store_true",
+                   help="Use bitsandbytes AdamW8bit instead of torch AdamW. "
+                        "Saves ~18 GB of optimizer state (float32 → uint8 quantised moments), "
+                        "required to fit 3B student + 14B teacher within 80 GB A100. "
+                        "Requires: pip install bitsandbytes")
     return p.parse_args()
 
 
@@ -331,7 +349,15 @@ def main():
         temperature=args.temperature,
     )
 
-    optimizer = torch.optim.AdamW([p for p in student.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.01)
+    trainable_params = [p for p in student.parameters() if p.requires_grad]
+    if args.use_8bit_adam:
+        if not _BNB_AVAILABLE:
+            raise RuntimeError("--use-8bit-adam requires bitsandbytes: pip install bitsandbytes")
+        optimizer = bnb.optim.AdamW8bit(trainable_params, lr=args.lr, weight_decay=0.01)
+        print("Optimizer: AdamW8bit (bitsandbytes) — ~18 GB saved vs float32 Adam")
+    else:
+        optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
+        print("Optimizer: AdamW (torch float32)")
     warmup_steps = min(args.warmup_steps, args.steps // 10)
     def lr_schedule(s):
         if warmup_steps > 0 and s < warmup_steps:

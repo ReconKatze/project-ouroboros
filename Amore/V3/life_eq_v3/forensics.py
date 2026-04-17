@@ -140,6 +140,11 @@ class ForensicConfig:
     load_state_low_utility_limit: int = 3
     low_utility_threshold: float = 0.0
     warmup_steps: int = 1000  # steps before forensic events can fire (rolling stats still accumulate)
+    # Separate cooldown for controller-family triggers (thrashing, low-utility LOAD_STATE loop).
+    # During action collapse the same action fires hundreds of consecutive steps; cooldown_steps=50
+    # still produces O(N/50) bundles × ~2 GB each, exhausting Colab disk.  200 steps caps a
+    # 300-step collapse at 1-2 bundles rather than 6, while still recording the onset and tail.
+    controller_cooldown_steps: int = 200
 
 
 class RollingStat:
@@ -180,8 +185,9 @@ class TriggerMonitor:
     def _in_cooldown(self, family: str, step: int) -> bool:
         return step < self.cooldowns.get(family, -1)
 
-    def _set_cooldown(self, family: str, step: int) -> None:
-        self.cooldowns[family] = step + self.config.cooldown_steps
+    def _set_cooldown(self, family: str, step: int, steps: Optional[int] = None) -> None:
+        duration = steps if steps is not None else self.config.cooldown_steps
+        self.cooldowns[family] = step + duration
 
     def _z_trigger(self, family: str, name: str, value: float, rolling: RollingStat, z_thresh: float, step: int) -> Optional[dict]:
         if self._in_cooldown(family, step) or not rolling.enough():
@@ -294,7 +300,7 @@ class TriggerMonitor:
             non_continue > self.config.controller_action_limit
             and not self._in_cooldown("controller", step)
         ):
-            self._set_cooldown("controller", step)
+            self._set_cooldown("controller", step, steps=self.config.controller_cooldown_steps)
             events.append({
                 "event_type": "controller_instability",
                 "trigger_name": "controller_thrashing",
@@ -306,7 +312,7 @@ class TriggerMonitor:
             sum(self.low_utility_loads) >= self.config.load_state_low_utility_limit
             and not self._in_cooldown("controller", step)
         ):
-            self._set_cooldown("controller", step)
+            self._set_cooldown("controller", step, steps=self.config.controller_cooldown_steps)
             events.append({
                 "event_type": "controller_instability",
                 "trigger_name": "low_utility_load_state_loop",

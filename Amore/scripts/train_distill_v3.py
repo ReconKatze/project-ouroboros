@@ -236,6 +236,9 @@ def parse_args():
     p.add_argument("--post-event-steps-critical", type=int, default=64)
     p.add_argument("--baseline-window", type=int, default=100)
     p.add_argument("--forensic-cooldown", type=int, default=50)
+    p.add_argument("--forensic-controller-cooldown", type=int, default=200,
+                   help="Cooldown steps between controller-instability forensic bundles. "
+                        "Higher than --forensic-cooldown to cap bundle count during action collapse.")
     p.add_argument("--resume", default=None,
                    help="Path to a checkpoint .pt file to resume training from")
     p.add_argument("--checkpoint-every", type=int, default=0,
@@ -292,6 +295,7 @@ def main():
             post_event_steps_critical=args.post_event_steps_critical,
             baseline_window=args.baseline_window,
             cooldown_steps=args.forensic_cooldown,
+            controller_cooldown_steps=args.forensic_controller_cooldown,
         ),
     )
 

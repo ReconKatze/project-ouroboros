@@ -129,7 +129,7 @@ class LifeEquationModel(nn.Module):
         gamma_eff: torch.Tensor,
         d_id: torch.Tensor,
         device: torch.device,
-    ) -> tuple[str, torch.Tensor, bool, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[str, torch.Tensor, bool, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch = state.Z_cog.shape[0]
         if candidate_state is None:
             s_compat = torch.zeros((batch, 1), device=device)
@@ -137,18 +137,19 @@ class LifeEquationModel(nn.Module):
             s_compat = self.store.compute_compatibility(state, candidate_state).to(device)
         c_cont = self.controller.continue_confidence(state.Z_cog)
         u_t = self.controller.build_input(state.Z_eps, d_id, c_cont, s_compat, boredom, z_ovr, coherence, v_self, gamma_eff)
-        action, trigger, fire = self.controller(u_t, state.steps_since_last_action)
+        action, trigger, fire, ctrl_entropy = self.controller(u_t, state.steps_since_last_action)
         utility = torch.zeros((batch, 1), device=device)
         if candidate_state is not None:
             utility = self.controller.utility(state.Z_cog, candidate_state.Z_cog)
 
         if self.profile.controller_mode == "disabled":
-            return "CONTINUE", torch.zeros_like(trigger), False, utility, c_cont, u_t
+            # Entropy detached in disabled mode — controller policy not being trained.
+            return "CONTINUE", torch.zeros_like(trigger), False, utility, c_cont, u_t, ctrl_entropy.detach()
         if self.profile.controller_mode == "passive":
-            return "CONTINUE", trigger, False, utility, c_cont, u_t
+            return "CONTINUE", trigger, False, utility, c_cont, u_t, ctrl_entropy
         if self.profile.controller_mode == "offline":
-            return action, trigger, False, utility, c_cont, u_t
-        return action, trigger, fire, utility, c_cont, u_t
+            return action, trigger, False, utility, c_cont, u_t, ctrl_entropy
+        return action, trigger, fire, utility, c_cont, u_t, ctrl_entropy
 
     def init_state(self, batch_size: int = 1, n_agents: int = 1) -> FullState:
         return zero_state(self.config, batch_size=batch_size, n_agents=n_agents)
@@ -377,7 +378,12 @@ class LifeEquationModel(nn.Module):
                 seq = mamba_out_seq
 
             # Store last-token output as this layer's Z_cog contribution (detached for BPTT).
-            new_cog_slots.append(seq[:, -1, :].detach())           # [B, d_model]
+            # Soft norm clamp: same bound as layer_input (sqrt(d_model)) so that Z_cog
+            # norms don't grow unboundedly as Mamba weights drift during training.
+            cog_slot = seq[:, -1, :]
+            _cn = cog_slot.norm(dim=-1, keepdim=True)
+            cog_slot = cog_slot / _cn.clamp(min=float(self.config.d_model) ** 0.5)
+            new_cog_slots.append(cog_slot.detach())                 # [B, d_model]
             mamba_idx += 1
 
         # Stack into [B, n_mamba_layers, d_model] — the new cognitive state
@@ -504,7 +510,7 @@ class LifeEquationModel(nn.Module):
                 v_self = torch.min(v_self, v_self_pred_t)
 
         phase_trace.append("controller_check")
-        action, trigger, fire, utility, c_cont, u_t = self._controller_step(
+        action, trigger, fire, utility, c_cont, u_t, ctrl_entropy = self._controller_step(
             state=state,
             candidate_state=candidate_state,
             boredom=boredom,
@@ -582,7 +588,10 @@ class LifeEquationModel(nn.Module):
         losses["L_base"] = losses["L_distill"] + losses["L_pred"] * self.config.lambda_pred + losses["L_id"]
         losses["L_resume"] = l_task_after_reload + self.config.lambda_consistency * l_consistency
         losses["L_noisy"] = l_noisy_reload
-        losses["L_ctrl"] = l_supervised_policy + (utility - l_actual_improvement).pow(2).mean()
+        # Entropy regularization: subtract 0.01 * entropy to maximize action distribution entropy.
+        # Gives the policy.weight gradients when supervised_policy_loss is absent, preventing
+        # the degenerate collapse where argmax always picks the same action (e.g. VOLUNTARY_END).
+        losses["L_ctrl"] = l_supervised_policy + (utility - l_actual_improvement).pow(2).mean() - 0.01 * ctrl_entropy
         # §29 v15: L_reg uses mutable Z_values instead of frozen config constants
         # Z_values index layout: 0=eps 1=cap 2=bored 3=pfat 4=conf 5=homeo 6=sleep 7=narr 8=trust
         # DETACH: Z_values is updated exclusively by phi_reflect (ValueDynamicsModule).

@@ -477,12 +477,18 @@ class ControllerModule(nn.Module):
             dim=-1,
         )
 
-    def forward(self, u_t: torch.Tensor, steps_since_last: int) -> Tuple[str, torch.Tensor, bool]:
+    def forward(self, u_t: torch.Tensor, steps_since_last: int) -> Tuple[str, torch.Tensor, bool, torch.Tensor]:
         scores = self.policy(u_t)
         action_idx = int(scores.argmax(dim=-1)[0].item())
         trigger = scores.max(dim=-1).values.unsqueeze(-1)
         fire = bool(trigger[0, 0] > self.config.tau_threshold and steps_since_last > self.config.cooldown_steps)
-        return self.ACTIONS[action_idx], trigger, fire
+        # Entropy regularization: maximize entropy of action distribution.
+        # Prevents the policy from collapsing to a single degenerate action (e.g.
+        # always VOLUNTARY_END) when the supervised signal is sparse or absent.
+        # Gradient flows through log_probs → scores → policy.weight / policy.bias.
+        log_probs = F.log_softmax(scores, dim=-1)
+        entropy = -(F.softmax(scores, dim=-1) * log_probs).sum(dim=-1).mean()
+        return self.ACTIONS[action_idx], trigger, fire, entropy
 
 
 class ValueDynamicsModule(nn.Module):

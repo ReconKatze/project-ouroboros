@@ -588,10 +588,12 @@ class LifeEquationModel(nn.Module):
         losses["L_base"] = losses["L_distill"] + losses["L_pred"] * self.config.lambda_pred + losses["L_id"]
         losses["L_resume"] = l_task_after_reload + self.config.lambda_consistency * l_consistency
         losses["L_noisy"] = l_noisy_reload
-        # Entropy regularization: subtract 0.01 * entropy to maximize action distribution entropy.
+        # Entropy regularization: subtract entropy to maximize action distribution entropy.
         # Gives the policy.weight gradients when supervised_policy_loss is absent, preventing
         # the degenerate collapse where argmax always picks the same action (e.g. VOLUNTARY_END).
-        losses["L_ctrl"] = l_supervised_policy + (utility - l_actual_improvement).pow(2).mean() - 0.01 * ctrl_entropy
+        # Raised from 0.01 → 0.02 at step 2960: INSPECT_MEMORY held dominance for 740+ consecutive
+        # steps with no self-correction; λ=0.01 insufficient to flatten its bias after that duration.
+        losses["L_ctrl"] = l_supervised_policy + (utility - l_actual_improvement).pow(2).mean() - 0.02 * ctrl_entropy
         # §29 v15: L_reg uses mutable Z_values instead of frozen config constants
         # Z_values index layout: 0=eps 1=cap 2=bored 3=pfat 4=conf 5=homeo 6=sleep 7=narr 8=trust
         # DETACH: Z_values is updated exclusively by phi_reflect (ValueDynamicsModule).

@@ -392,7 +392,13 @@ class LifeEquationModel(nn.Module):
                 _dream_residual, effective_consolidating,
             )
         else:
-            state.Z_narr = 0.9 * state.Z_narr + 0.1 * layer_input[:, : self.config.d_narr]
+            # Stub EMA: normalize narr_feed so Z_narr can't accumulate unbounded norms.
+            # layer_input can grow over thousands of steps; without normalization the 0.9-decay
+            # EMA tracks it upward and Z_narr explodes → L_reg terms explode → positive feedback.
+            # clamp(min=1.0) keeps vectors already inside the unit ball unchanged.
+            narr_feed = layer_input[:, : self.config.d_narr]
+            narr_feed = narr_feed / narr_feed.norm(dim=-1, keepdim=True).clamp(min=1.0)
+            state.Z_narr = (0.9 * state.Z_narr + 0.1 * narr_feed).clamp(-5.0, 5.0)
         base_learning_signal = distill_loss if distill_loss is not None else pred_loss.detach() * self.config.lambda_pred
         learn_signal = base_learning_signal.view(1, 1).expand(batch, self.config.d_learn)
         state.Z_learn = 0.9 * state.Z_learn + 0.1 * learn_signal

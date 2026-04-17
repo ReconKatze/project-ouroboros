@@ -83,6 +83,29 @@ def detach_state(state: FullState) -> FullState:
     )
 
 
+_STATE_NORM_CAP = 10.0  # max per-vector norm for any carried state tensor
+
+
+def clip_state_norms(state: FullState) -> FullState:
+    """Hard-cap per-vector norms in all carried state tensors.
+
+    Prevents unbounded accumulation from EMA-style state updates (Z_narr stub,
+    Z_eps, Z_homeo, etc.) compounding across thousands of steps.  Tensors whose
+    norm is already ≤ _STATE_NORM_CAP are untouched; larger tensors are rescaled
+    to exactly _STATE_NORM_CAP.  Non-tensor fields (ints, lists, None) pass through.
+    """
+    capped: dict = {}
+    for k, v in vars(state).items():
+        if isinstance(v, torch.Tensor) and v.ndim >= 1:
+            # Per-vector clipping along the last dimension
+            norms = v.norm(dim=-1, keepdim=True)
+            scale = (_STATE_NORM_CAP / norms.clamp(min=1e-6)).clamp(max=1.0)
+            capped[k] = v * scale
+        else:
+            capped[k] = v
+    return FullState(**capped)
+
+
 def gradient_norms(model: torch.nn.Module) -> dict[str, float]:
     norms: dict[str, float] = {}
     for name, param in model.named_parameters():
@@ -447,7 +470,7 @@ def main():
             prev_kl = None
             continue
 
-        le_state = detach_state(outputs.state)
+        le_state = clip_state_norms(detach_state(outputs.state))
         prev_layer_input = outputs.diagnostics.get("layer_input")
         kl = kl_distill_loss(outputs.logits.float(), teacher_last, T=args.temperature)
         prev_kl = kl.detach()
@@ -520,7 +543,7 @@ def main():
                     consolidating=True,
                 )
                 if consol_out.state is not None:
-                    le_state = detach_state(consol_out.state)
+                    le_state = clip_state_norms(detach_state(consol_out.state))
 
         if args.checkpoint_every > 0 and step % args.checkpoint_every == 0:
             periodic_path = str(Path(args.out).with_suffix("")) + f"_step{step:06d}.pt"

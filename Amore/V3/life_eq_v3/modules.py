@@ -1045,3 +1045,77 @@ class TrustModule(nn.Module):
         tau = getattr(self.config, "tau_trust", 32.0)
         # Return float32 — state tensors must stay float32 (L_reg multiplies against float32 alpha)
         return (t_trust + (trust_target - t_trust) / tau).clamp(0.0, 1.0).float()
+
+
+# ── Block Attention Residuals (arXiv:2603.15031) ─────────────────────────────
+
+
+class BlockAttnResidual(nn.Module):
+    """Block Attention Residuals (Block AttnRes, Kimi Team, arXiv:2603.15031).
+
+    Replaces uniform depth-wise residual accumulation with learned softmax attention
+    over block-level hidden-state summaries.  Standard residuals accumulate all prior
+    layer outputs with fixed unit weights, causing hidden-state magnitude growth with
+    depth (PreNorm dilution).  AttnRes lets each layer selectively reweight earlier
+    representations via a single learned pseudo-query w_l per layer.
+
+    Adaptation for life_eq_v3
+    --------------------------
+    The 28 layers are naturally partitioned into 4 blocks by the attention anchors
+    {0, 9, 18, 27}.  We apply Block AttnRes once per inter-block boundary (before
+    attention anchors 9, 18, 27) rather than per sub-layer.  The block summary b_k
+    is the seq tensor immediately after attention anchor k.
+
+    At anchor k ≥ 1 the input to that attention layer is replaced by:
+
+        V  = [b_0, b_1, ..., b_{k-1}, seq_current]   shape [k+1, B, T, d]
+        K  = RMSNorm(V)                               per-slot key normalisation
+        α  = softmax(w_k · K, dim=0)                  [k+1, B, T] depth-wise weights
+        h  = sum_i α_i * V_i                          [B, T, d]   new seq
+
+    Zero initialization of w_k → uniform 1/(k+1) weights at step 0, exactly
+    matching an equal-weight average — no training instability at startup.
+
+    Parameters
+    -----------
+    n_anchors : int
+        Number of attention anchors (4 for life_eq_v3).  We allocate n_anchors
+        pseudo-query slots; index 0 is never called (no history at first anchor).
+
+    Parameter cost: n_anchors × d_model ≈ 4 × 1536 = 6 144 scalars.
+    Arithmetic:     O(N d) per token per anchor, N = number of completed blocks.
+    """
+
+    def __init__(self, config: LifeEquationConfig, n_anchors: int = 4):
+        super().__init__()
+        self.n_anchors = n_anchors
+        # Pseudo-query per anchor.  Zero-init → uniform softmax at step 0.
+        self.w_q = nn.ParameterList([
+            nn.Parameter(torch.zeros(config.d_model))
+            for _ in range(n_anchors)
+        ])
+        # Shared RMSNorm normalises key magnitudes so no single block dominates.
+        # nn.RMSNorm(d_model) applies along the last dimension — works on any shape.
+        self.key_norm = nn.RMSNorm(config.d_model)
+
+    def forward(
+        self,
+        anchor_idx: int,
+        block_summaries: List[torch.Tensor],  # k completed summaries [B, T, d] each
+        partial_block: torch.Tensor,          # current seq [B, T, d]
+    ) -> torch.Tensor:
+        """Return attention-weighted combination of block summaries + current seq.
+
+        anchor_idx  : which anchor slot's pseudo-query to use (1, 2, or 3).
+        block_summaries : seq values saved after each previous attention anchor.
+        partial_block   : current seq at this anchor (before the attention layer).
+        """
+        # V: [k+1, B, T, d_model] — all sources including current partial block
+        V = torch.stack(block_summaries + [partial_block], dim=0)
+        # Normalise keys; RMSNorm broadcasts over leading dims, acts on last (d_model)
+        K = self.key_norm(V)
+        # Depth-wise attention logits: [k+1, B, T]
+        logits = torch.einsum("d, n b t d -> n b t", self.w_q[anchor_idx], K)
+        weights = torch.softmax(logits, dim=0)          # [k+1, B, T]
+        # Weighted sum: [B, T, d_model]
+        return torch.einsum("n b t, n b t d -> b t d", weights, V)

@@ -10,6 +10,7 @@ import torch.nn as nn
 from .config import LifeEquationConfig, VariantProfile
 from .modules import (
     AttentionModule,
+    BlockAttnResidual,
     CapacityModule,
     ControllerModule,
     DreamModule,
@@ -108,6 +109,10 @@ class LifeEquationModel(nn.Module):
         self.sleep_module = SleepModule(self.config)
         self.dream_module = DreamModule(self.config)
         self.trust_module = TrustModule(self.config)
+        # Block Attention Residuals (arXiv:2603.15031). Always instantiated — parameter cost
+        # is negligible (4 × d_model = 6 144 scalars). Active only when
+        # profile.enable_attn_residuals=True. n_anchors=4 matches attention_anchors {0,9,18,27}.
+        self.attn_res = BlockAttnResidual(self.config, n_anchors=len(self.config.attention_anchors))
         self.store = StateStore(self.config, root_dir=state_store_dir)
 
     def _zeros(self, batch: int, width: int, device: torch.device) -> torch.Tensor:
@@ -321,15 +326,31 @@ class LifeEquationModel(nn.Module):
         effective_seq_trace: List[torch.Tensor] = []
         raw_mamba_out_trace: List[torch.Tensor] = []
         mamba_out_seq_trace: List[torch.Tensor] = []
+        # Block AttnRes tracking: one block summary saved after each attention anchor.
+        # block_summaries[k] = seq immediately after attention anchor k.
+        # attn_anchor_idx counts how many anchors have been processed so far.
+        block_summaries: List[torch.Tensor] = []
+        attn_anchor_idx = 0
         mamba_idx = 0
         for layer_index in range(self.config.n_layers_total):
             if layer_index in self.config.attention_anchors:
+                # Block AttnRes: before each attention layer that has prior block history,
+                # replace seq with a softmax-weighted combination of all block summaries
+                # plus the current (partial) block seq.  Anchor 0 has no history → skip.
+                # Zero-initialized pseudo-queries ensure uniform average at step 0.
+                if self.profile.enable_attn_residuals and block_summaries:
+                    seq = self.attn_res(attn_anchor_idx, block_summaries, seq)
+
                 if not effective_consolidating:
                     if layer_index == 0:
                         seq = self.attention_module.plain_attention(seq)
                     else:
                         seq = self.attention_module.guided_sparse_attention(seq, step, state.Z_cap)
                 # During consolidation, attention layers are bypassed (seq passes through unchanged).
+
+                # Save block summary (seq after this attention layer) for future AttnRes calls.
+                block_summaries.append(seq)
+                attn_anchor_idx += 1
                 continue
 
             # ── Mamba layer ──────────────────────────────────────────────────────

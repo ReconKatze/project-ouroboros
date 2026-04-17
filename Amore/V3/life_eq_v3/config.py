@@ -51,6 +51,13 @@ class VariantProfile:
     # §T_ij  TrustModule: epistemic self-trust dynamics from (Z_eps, coherence, D_id).
     # When disabled, T_trust stays at trust_default (1.0) throughout the lifetime.
     enable_trust_dynamics: bool = False
+    # Block Attention Residuals (arXiv:2603.15031).
+    # Replaces uniform depth-wise residual accumulation with learned softmax attention
+    # over block-level hidden-state summaries at each attention-anchor boundary.
+    # Applied at anchors {9, 18, 27}; anchor 0 has no prior history so is always standard.
+    # Zero-initialized pseudo-queries → uniform average at step 0 (no instability).
+    # Enable in variants where PreNorm dilution / depth accumulation is a concern.
+    enable_attn_residuals: bool = False
 
 
 @dataclass(frozen=True)

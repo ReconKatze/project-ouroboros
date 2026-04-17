@@ -363,6 +363,29 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         enable_memory_consolidation=True,
         enable_social_relational=True,
     ),
+    # ── AttnRes variants (arXiv:2603.15031) ──────────────────────────────────
+    # Block Attention Residuals applied at attention-anchor boundaries {9, 18, 27}.
+    # Start with round3_full config (all modules active) and add enable_attn_residuals.
+    # Expected benefit: bounded output magnitudes across depth, more uniform gradient flow,
+    # each attention layer can selectively weight earlier block representations.
+    "round3_attnres": _profile(
+        "round3_attnres",
+        "Round 3 full config + Block Attention Residuals (arXiv:2603.15031). "
+        "Applies learned softmax attention over block-level seq summaries before each "
+        "attention anchor (layers 9, 18, 27) instead of uniform residual accumulation. "
+        "Zero-initialized pseudo-queries ensure no training instability at startup. "
+        "Run this alongside round3_full to measure the gradient/loss delta.",
+        training_focus=("attn_residuals", "depth_weighting", "narrative_coherence", "trust_dynamics"),
+        controller_mode="live",
+        enable_narrative=True,
+        enable_sleep_dream=True,
+        enable_trust_dynamics=True,
+        enable_memory_read=True,
+        enable_memory_write=True,
+        enable_memory_consolidation=True,
+        enable_social_relational=True,
+        enable_attn_residuals=True,
+    ),
     "cycle7_adversarial": _profile(
         "cycle7_adversarial",
         "Cycle 7: adversarial stress testing — mechanical and constitutional. "

@@ -96,7 +96,7 @@ def clip_state_norms(state: FullState) -> FullState:
     """
     capped: dict = {}
     for k, v in vars(state).items():
-        if isinstance(v, torch.Tensor) and v.ndim >= 1:
+        if isinstance(v, torch.Tensor) and v.ndim >= 1 and v.is_floating_point():
             # Per-vector clipping along the last dimension
             norms = v.norm(dim=-1, keepdim=True)
             scale = (_STATE_NORM_CAP / norms.clamp(min=1e-6)).clamp(max=1.0)

@@ -248,7 +248,7 @@ class LifeEquationConfig:
     # policy toward CONTINUE as the default action.  Order matches ACTIONS tuple:
     # (CONTINUE, INSPECT_MEMORY, LOAD_STATE, VOLUNTARY_END).
     # Training-only: inference argmax is unaffected.
-    ctrl_prior: Tuple[float, ...] = (0.70, 0.10, 0.10, 0.10)
+    ctrl_prior: Tuple[float, ...] = (0.55, 0.15, 0.15, 0.15)
     variant_profile: Optional[VariantProfile] = None
 
     @property

@@ -63,11 +63,11 @@ class VariantProfile:
 @dataclass(frozen=True)
 class LifeEquationConfig:
     vocab_size: int = 151936
-    d_model: int = 1536
-    n_layers_total: int = 28
-    n_mamba_layers: int = 24
-    attention_anchors: Tuple[int, ...] = (0, 9, 18, 27)
-    n_heads: int = 48
+    d_model: int = 3072           # V3.5: 2× V3 width for ~3B total params
+    n_layers_total: int = 32      # V3.5: 28 → 32 (4 extra Mamba layers)
+    n_mamba_layers: int = 28      # V3.5: 24 → 28
+    attention_anchors: Tuple[int, ...] = (0, 10, 21, 31)  # V3.5: evenly spaced across 32 layers
+    n_heads: int = 48             # head_dim: 32 → 64 (3072/48)
     n_id_heads: int = 8
     d_state: int = 128
     d_mod: int = 64
@@ -242,7 +242,7 @@ class LifeEquationConfig:
     d_sdm: int = 128                 # GRU hidden size (small — input is only 8 scalars)
     lambda_self_model: float = 0.05  # L_self_model weight in L_total
     sdm_lookahead_k: int = 5         # K-step lookahead in evaluation / [THINK] window
-    model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (28, 24, 48, 64, 14))
+    model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (32, 28, 48, 64, 14))  # V3.5: updated n_layers/n_mamba
     # §28 Controller action prior for KL regularization.
     # Replaces uniform entropy maximisation with KL(p || ctrl_prior), pulling the
     # policy toward CONTINUE as the default action.  Order matches ACTIONS tuple:

@@ -493,12 +493,17 @@ class ControllerModule(nn.Module):
             action_idx = int(scores.argmax(dim=-1)[0].item())
         trigger = scores.max(dim=-1).values.unsqueeze(-1)
         fire = bool(trigger[0, 0] > self.config.tau_threshold and steps_since_last > self.config.cooldown_steps)
-        # Entropy regularization: maximize entropy of action distribution.
-        # Prevents the policy from collapsing to a single degenerate action (e.g.
-        # always VOLUNTARY_END) when the supervised signal is sparse or absent.
-        # Gradient flows through log_probs → scores → policy.weight / policy.bias.
+        # KL-to-prior regularization: pulls policy toward a CONTINUE-biased prior
+        # instead of maximising uniform entropy.  KL(p || prior) is zero when
+        # p == prior and positive elsewhere; subtracting -KL in L_ctrl becomes
+        # +KL, so minimising L_ctrl drives p → prior.
+        # Prior order matches ACTIONS: (CONTINUE, INSPECT_MEMORY, LOAD_STATE, VOLUNTARY_END).
+        # Training-only: inference uses argmax on scores, unaffected by this term.
         log_probs = probs.log()
-        entropy = -(probs * log_probs).sum(dim=-1).mean()
+        log_prior = torch.tensor(
+            list(self.config.ctrl_prior), dtype=probs.dtype, device=probs.device
+        ).log()
+        entropy = -(probs * (log_probs - log_prior)).sum(dim=-1).mean()
         return self.ACTIONS[action_idx], trigger, fire, entropy
 
 

@@ -233,6 +233,7 @@ class LifeEquationConfig:
     M_vol_min: float = 10.0       # Minimum Z_mat for voluntary death (~12,400 steps to reach via harmonic growth)
     vol_end_step_min: int = 100_000  # Global training step before VOLUNTARY_END can fire
     vol_end_logit_bias: float = -2.0  # Logit penalty on VOLUNTARY_END before softmax; requires strong policy signal to win
+    inspect_memory_logit_bias: float = -1.0  # Logit penalty on INSPECT_MEMORY; keeps episodic write rate below 15%
     # L_reg scale: homeostatic terms are O(100-200) vs KL O(0.3-1.1).
     # Without scaling, L_reg dominates gradients and drowns the distillation signal.
     lambda_reg: float = 0.01

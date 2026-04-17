@@ -478,10 +478,17 @@ class ControllerModule(nn.Module):
         )
 
     def forward(self, u_t: torch.Tensor, steps_since_last: int) -> Tuple[str, torch.Tensor, bool, torch.Tensor]:
-        scores = self.policy(u_t).clone()
-        # Persistent logit penalty on VOLUNTARY_END: policy must generate a much stronger
-        # raw score for VOL_END to win selection. Complements the step-gate in vol_avail.
+        raw_scores = self.policy(u_t)
+        # Fire decision uses raw scores so logit biases don't suppress the trigger signal.
+        trigger = raw_scores.max(dim=-1).values.unsqueeze(-1)
+        fire = bool(trigger[0, 0] > self.config.tau_threshold and steps_since_last > self.config.cooldown_steps)
+        # Apply per-action logit biases only for selection/softmax — not for the fire gate.
+        # VOL_END bias: requires strong policy signal to win selection (complements step-gate).
+        # INSPECT_MEMORY bias: reduces write rate; episodic writes are expensive and should
+        # be reserved for genuinely surprising events, not fired at training-stage baseline rates.
+        scores = raw_scores.clone()
         scores[:, self.ACTIONS.index("VOLUNTARY_END")] += self.config.vol_end_logit_bias
+        scores[:, self.ACTIONS.index("INSPECT_MEMORY")] += self.config.inspect_memory_logit_bias
         # Action selection: sample during training, greedy argmax at inference.
         # Pure argmax + entropy regularization fails when entropy is already near-maximal
         # (ln(4)≈1.386): a persistent tiny logit bias causes 100% argmax repetition even
@@ -494,8 +501,6 @@ class ControllerModule(nn.Module):
             action_idx = int(torch.multinomial(probs[0], 1).item())
         else:
             action_idx = int(scores.argmax(dim=-1)[0].item())
-        trigger = scores.max(dim=-1).values.unsqueeze(-1)
-        fire = bool(trigger[0, 0] > self.config.tau_threshold and steps_since_last > self.config.cooldown_steps)
         # KL-to-prior regularization: pulls policy toward a CONTINUE-biased prior
         # instead of maximising uniform entropy.  KL(p || prior) is zero when
         # p == prior and positive elsewhere; subtracting -KL in L_ctrl becomes

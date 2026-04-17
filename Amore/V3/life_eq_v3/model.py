@@ -363,6 +363,12 @@ class LifeEquationModel(nn.Module):
         state.Z_cog = torch.stack(new_cog_slots, dim=1)
         # Current-step final output: last layer's last token
         layer_input = seq[:, -1, :]                                # [B, d_model]
+        # Soft norm clamp: 24 stacked Mamba-3 blocks can amplify activations
+        # unboundedly as weights drift during training.  sqrt(d_model) ≈ 39 is the
+        # expected norm at random init (each element ~N(0,1)).  Vectors already
+        # inside this ball are untouched; larger vectors are rescaled to norm=sqrt(d_model).
+        _li_norm = layer_input.norm(dim=-1, keepdim=True)
+        layer_input = layer_input / _li_norm.clamp(min=float(self.config.d_model) ** 0.5)
 
         # ── Phase D: post-layer state updates ───────────────────────────────────
         phase_trace.append("post_layer_updates")

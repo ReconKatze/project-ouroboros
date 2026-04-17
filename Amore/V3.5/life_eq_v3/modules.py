@@ -478,7 +478,10 @@ class ControllerModule(nn.Module):
         )
 
     def forward(self, u_t: torch.Tensor, steps_since_last: int) -> Tuple[str, torch.Tensor, bool, torch.Tensor]:
-        scores = self.policy(u_t)
+        scores = self.policy(u_t).clone()
+        # Persistent logit penalty on VOLUNTARY_END: policy must generate a much stronger
+        # raw score for VOL_END to win selection. Complements the step-gate in vol_avail.
+        scores[:, self.ACTIONS.index("VOLUNTARY_END")] += self.config.vol_end_logit_bias
         # Action selection: sample during training, greedy argmax at inference.
         # Pure argmax + entropy regularization fails when entropy is already near-maximal
         # (ln(4)≈1.386): a persistent tiny logit bias causes 100% argmax repetition even

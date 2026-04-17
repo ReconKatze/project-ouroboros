@@ -536,6 +536,7 @@ class LifeEquationModel(nn.Module):
                 float(v_self.mean().item()) < _theta_vol
                 and state.steps_since_last_action > self.config.T_vol_min
                 and float(state.Z_mat.mean().item()) > self.config.M_vol_min
+                and step >= self.config.vol_end_step_min
             )
             if vol_avail:
                 final_archive = self.store.voluntary_consolidation(state)

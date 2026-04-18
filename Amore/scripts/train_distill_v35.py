@@ -387,6 +387,11 @@ def parse_args():
                         "Required for 35B teacher on A100 80 GB: bf16 alone consumes 70 GB. "
                         "Disable only if using a small teacher that fits in bf16. "
                         "Requires: pip install bitsandbytes")
+    p.add_argument("--teacher-cpu", action="store_true", default=False,
+                   help="Load teacher in bfloat16 on CPU instead of GPU. Frees ~22 GB VRAM "
+                        "for the student at the cost of slower teacher inference per step. "
+                        "Requires ~54 GB system RAM for a 27B teacher. "
+                        "Takes precedence over --teacher-4bit.")
     p.add_argument("--no-forensics", action="store_true",
                    help="Skip forensic bundle collection and writing each step. "
                         "Console loss output is unaffected. Use when forensic bundles are not needed.")
@@ -460,7 +465,16 @@ def main():
         torch.cuda.empty_cache()
         print("  Triton warmup done.")
 
-    if args.teacher_4bit:
+    if args.teacher_cpu:
+        # Load teacher in bfloat16 on CPU. Frees ~22 GB GPU VRAM at the cost of
+        # slower per-step teacher inference (one 1024-token prefill on CPU).
+        # Requires ~54 GB system RAM for a 27B model.
+        teacher = AutoModelForCausalLM.from_pretrained(
+            args.teacher, torch_dtype=torch.bfloat16
+        )
+        teacher_device = torch.device("cpu")
+        print(f"Teacher: {args.teacher} (bfloat16, CPU — GPU VRAM freed)")
+    elif args.teacher_4bit:
         if not _BNB_AVAILABLE:
             raise bitsandbytes_requirement_error("--teacher-4bit")
         bnb_cfg = BitsAndBytesConfig(
@@ -472,9 +486,11 @@ def main():
         teacher = AutoModelForCausalLM.from_pretrained(
             args.teacher, quantization_config=bnb_cfg, device_map={"": 0}
         )
+        teacher_device = device
         print(f"Teacher: {args.teacher} (4-bit NF4, device_map={{0}})")
     else:
         teacher = AutoModelForCausalLM.from_pretrained(args.teacher, torch_dtype=amp_dtype).to(device)
+        teacher_device = device
         print(f"Teacher: {args.teacher} ({amp_dtype})")
     teacher.eval()
     for p in teacher.parameters():
@@ -586,7 +602,8 @@ def main():
         pre_epi_index = le_state.epi_index
         input_ids = torch.stack([next_chunk() for _ in range(args.batch_size)]).to(device)
         with torch.no_grad():
-            teacher_last = teacher(input_ids=input_ids, use_cache=False).logits[:, -1, :].float()
+            _t_ids = input_ids if teacher_device == device else input_ids.to(teacher_device)
+            teacher_last = teacher(input_ids=_t_ids, use_cache=False).logits[:, -1, :].float().to(device)
 
         autocast_ctx = (
             torch.amp.autocast("cuda", dtype=amp_dtype)

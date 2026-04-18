@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-transfer_v3_to_v35.py — warm-initialise a V3.5 (~6.5B) model from a V3 (~1.5B) checkpoint.
+transfer_v3_to_v35.py — warm-initialise a V3.5 (~6.0B) model from a V3 (~1.5B) checkpoint.
 
 Strategy
 --------
@@ -15,11 +15,11 @@ Layer remapping
 ---------------
   V3  attention anchors : (0,  9, 18, 27)   24 Mamba + 4 attention in 28 layers
   V3.5 attention anchors: derived from the live V3.5 config
-                          (currently (0, 10, 21, 31) for 28 Mamba + 4 attention in 32 layers)
+                          (currently (0, 9, 19, 28) for 25 Mamba + 4 attention in 29 layers)
 
   Attention layers transfer 1-for-1 by anchor position (1st→1st, 2nd→2nd, …).
   Mamba layers cycle: V3.5 Mamba slot i gets V3 Mamba slot (i % 24).
-                     V3.5 slots 0–23 → V3 slots 0–23 (exact); slots 24–27 → V3 slots 0–3.
+                     V3.5 slots 0–23 → V3 slots 0–23 (exact); slots 24 → V3 slot 0.
 
 Non-layer parameters (embed, lm_head, LE modules, controller) transfer by the
 same exact/padded/skip logic without any index remapping.

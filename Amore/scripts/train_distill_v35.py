@@ -581,7 +581,9 @@ def main():
         pre_epi_index = le_state.epi_index
         input_ids = torch.stack([next_chunk() for _ in range(args.batch_size)]).to(device)
         with torch.no_grad():
-            teacher_last = teacher(input_ids=input_ids).logits[:, -1, :].float()
+            teacher_last = teacher(input_ids=input_ids, use_cache=False).logits[:, -1, :].float()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
         autocast_ctx = (
             torch.amp.autocast("cuda", dtype=amp_dtype)

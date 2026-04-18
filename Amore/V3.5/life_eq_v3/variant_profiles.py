@@ -395,8 +395,10 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         "L_halt = lambda_halt * E[loop_index] encourages early halting. No consistency "
         "loss (L_attn_consist=0 by construction). Matches the core HRM/TRM mechanism "
         "(arXiv:2506.21734, arXiv:2510.04871). Run alongside round3_looped to isolate "
-        "the benefit of adaptive halting over fixed-loop + consistency loss.",
-        training_focus=("looped_attention", "adaptive_halting", "attn_residuals", "narrative_coherence", "trust_dynamics"),
+        "the benefit of adaptive halting over fixed-loop + consistency loss. "
+        "SelfDynamicsModel active: GRU predicts (d_id, eps, c_cont, v_self) one step "
+        "ahead; pessimistic V_self augmentation makes the controller forward-looking.",
+        training_focus=("looped_attention", "adaptive_halting", "attn_residuals", "narrative_coherence", "trust_dynamics", "self_dynamics"),
         controller_mode="live",
         enable_narrative=True,
         enable_sleep_dream=True,
@@ -408,6 +410,7 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         enable_attn_residuals=True,
         enable_looped_attention=True,
         enable_attn_halting=True,
+        enable_self_dynamics=True,
     ),
     "round3_looped": _profile(
         "round3_looped",

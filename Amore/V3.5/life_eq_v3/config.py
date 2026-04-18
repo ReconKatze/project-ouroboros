@@ -74,10 +74,10 @@ class VariantProfile:
 @dataclass(frozen=True)
 class LifeEquationConfig:
     vocab_size: int = 151936
-    d_model: int = 5120           # V3.5: ~7B target; 5× V3 width (was 3072/~3B)
-    n_layers_total: int = 36      # V3.5: 32 Mamba + 4 attention
-    n_mamba_layers: int = 32      # V3.5: 28 → 32
-    attention_anchors: Tuple[int, ...] = (0, 12, 24, 35)  # V3.5: evenly spaced across 36 layers
+    d_model: int = 5120           # V3.5: ~6.5B target; 28 Mamba + 4 attention across 32 layers
+    n_layers_total: int = 32      # V3.5 trimmed: 28 Mamba + 4 attention (was 36)
+    n_mamba_layers: int = 28      # V3.5 trimmed: 32 → 28 (saves ~636M params)
+    attention_anchors: Tuple[int, ...] = (0, 10, 21, 31)  # evenly spaced across 32 layers
     n_heads: int = 80             # head_dim=64 (5120/80)
     n_id_heads: int = 8
     d_state: int = 128
@@ -256,7 +256,7 @@ class LifeEquationConfig:
     d_sdm: int = 128                 # GRU hidden size (small — input is only 8 scalars)
     lambda_self_model: float = 0.05  # L_self_model weight in L_total
     sdm_lookahead_k: int = 5         # K-step lookahead in evaluation / [THINK] window
-    model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (36, 32, 80, 64, 14))  # V3.5: n_layers/n_mamba/n_heads/head_dim
+    model_hash_seed: Tuple[int, ...] = field(default_factory=lambda: (32, 28, 80, 64, 14))  # V3.5 trimmed: n_layers/n_mamba/n_heads/head_dim
     # §28 Controller action prior for KL regularization.
     # Replaces uniform entropy maximisation with KL(p || ctrl_prior), pulling the
     # policy toward CONTINUE as the default action.  Order matches ACTIONS tuple:

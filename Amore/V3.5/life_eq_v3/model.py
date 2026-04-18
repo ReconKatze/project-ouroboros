@@ -402,7 +402,11 @@ class LifeEquationModel(nn.Module):
             gated_error_trace.append(gated_error_seq.detach().cpu())
             effective_seq_trace.append(effective_seq.detach().cpu())
 
-            raw_mamba_out = self.mamba_layers[mamba_idx](effective_seq)  # [B, seq_len, d_model]
+            # use_reentrant=True: re-runs the forward under autograd rather than using
+            # saved-tensor hooks, so it doesn't conflict with Mamba-3's own ctx.saved_tensors.
+            raw_mamba_out = torch.utils.checkpoint.checkpoint(
+                self.mamba_layers[mamba_idx], effective_seq, use_reentrant=True
+            )  # [B, seq_len, d_model]
             raw_mamba_out_trace.append(raw_mamba_out.detach().cpu())
 
             # P_soft reconstruction: add the prediction back (the Mamba output represents the

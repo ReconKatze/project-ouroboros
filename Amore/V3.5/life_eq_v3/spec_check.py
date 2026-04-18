@@ -6,7 +6,7 @@ from typing import List
 from .config import LifeEquationConfig
 
 
-EXPECTED_V35_ATTENTION_ANCHORS = (0, 12, 24, 35)
+EXPECTED_V35_ATTENTION_ANCHORS = (0, 10, 21, 31)
 
 
 @dataclass(frozen=True)

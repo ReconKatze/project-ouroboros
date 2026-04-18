@@ -396,9 +396,9 @@ def main():
             bnb_4bit_use_double_quant=True,
         )
         teacher = AutoModelForCausalLM.from_pretrained(
-            args.teacher, quantization_config=bnb_cfg, device_map="auto"
+            args.teacher, quantization_config=bnb_cfg, device_map={"": 0}
         )
-        print(f"Teacher: {args.teacher} (4-bit NF4, device_map=auto)")
+        print(f"Teacher: {args.teacher} (4-bit NF4, device_map={{0}})")
     else:
         teacher = AutoModelForCausalLM.from_pretrained(args.teacher, torch_dtype=amp_dtype).to(device)
         print(f"Teacher: {args.teacher} ({amp_dtype})")

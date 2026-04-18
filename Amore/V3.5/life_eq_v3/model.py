@@ -113,6 +113,13 @@ class LifeEquationModel(nn.Module):
         # is negligible (4 × d_model = 6 144 scalars). Active only when
         # profile.enable_attn_residuals=True. n_anchors=4 matches attention_anchors {0,12,24,35}.
         self.attn_res = BlockAttnResidual(self.config, n_anchors=len(self.config.attention_anchors))
+        # Adaptive halting heads for looped attention: one Linear(d_model→1) per non-anchor-0
+        # anchor. Always instantiated (3 × d_model ≈ 15 K params). Active only when both
+        # enable_looped_attention and enable_attn_halting are True.
+        n_loopable = sum(1 for a in self.config.attention_anchors if a != 0)
+        self.halt_heads = nn.ModuleList([
+            nn.Linear(self.config.d_model, 1) for _ in range(n_loopable)
+        ])
         self.store = StateStore(self.config, root_dir=state_store_dir)
 
     def _zeros(self, batch: int, width: int, device: torch.device) -> torch.Tensor:
@@ -334,6 +341,7 @@ class LifeEquationModel(nn.Module):
         attn_anchor_idx = 0
         mamba_idx = 0
         consist_acc = torch.tensor(0.0, device=x.device)  # L_attn_consist accumulator
+        halt_acc = torch.tensor(0.0, device=x.device)     # L_halt ponder cost accumulator
         for layer_index in range(self.config.n_layers_total):
             if layer_index in self.config.attention_anchors:
                 # Block AttnRes: before each attention layer that has prior block history,
@@ -345,18 +353,37 @@ class LifeEquationModel(nn.Module):
 
                 if not effective_consolidating:
                     if self.profile.enable_looped_attention and layer_index != 0:
-                        # Run attention n_attn_loops times with shared weights.
-                        # Capture loop-1 output detached; final output carries gradients.
                         n_loops = self.config.n_attn_loops
-                        loop_input = seq
-                        seq_loop1: Optional[torch.Tensor] = None
-                        for loop_i in range(n_loops):
-                            loop_out = self.attention_module.guided_sparse_attention(loop_input, step, state.Z_cap)
-                            if loop_i == 0:
-                                seq_loop1 = loop_out.detach()
-                            loop_input = loop_out
-                        seq = loop_out
-                        consist_acc = consist_acc + (seq - seq_loop1).pow(2).mean()
+                        if self.profile.enable_attn_halting:
+                            # ACT: softmax-weighted combination of loop outputs.
+                            # halt_heads[halt_idx] scores each loop's last-token output.
+                            # Softmax over loop dim → probability distribution over loop steps.
+                            # Ponder cost = E[loop_index] = Σ i·w_i; minimising it pushes
+                            # weight onto earlier loops (adaptive compute in training).
+                            halt_idx = attn_anchor_idx - 1
+                            loop_in = seq
+                            loop_outputs: List[torch.Tensor] = []
+                            halt_logits: List[torch.Tensor] = []
+                            for _ in range(n_loops):
+                                loop_out = self.attention_module.guided_sparse_attention(loop_in, step, state.Z_cap)
+                                loop_outputs.append(loop_out)
+                                halt_logits.append(self.halt_heads[halt_idx](loop_out[:, -1, :]))  # [B, 1]
+                                loop_in = loop_out
+                            halt_w = torch.softmax(torch.cat(halt_logits, dim=-1), dim=-1)  # [B, n_loops]
+                            seq = sum(halt_w[:, i].unsqueeze(-1).unsqueeze(-1) * loop_outputs[i] for i in range(n_loops))
+                            loop_idx_t = torch.arange(n_loops, device=x.device, dtype=halt_w.dtype)
+                            halt_acc = halt_acc + (halt_w * loop_idx_t.unsqueeze(0)).sum(-1).mean()
+                        else:
+                            # Fixed-loop: capture loop-1 detached for consistency loss.
+                            loop_input = seq
+                            seq_loop1: Optional[torch.Tensor] = None
+                            for loop_i in range(n_loops):
+                                loop_out = self.attention_module.guided_sparse_attention(loop_input, step, state.Z_cap)
+                                if loop_i == 0:
+                                    seq_loop1 = loop_out.detach()
+                                loop_input = loop_out
+                            seq = loop_out
+                            consist_acc = consist_acc + (seq - seq_loop1).pow(2).mean()
                     elif layer_index == 0:
                         seq = self.attention_module.plain_attention(seq)
                     else:
@@ -650,10 +677,11 @@ class LifeEquationModel(nn.Module):
         else:
             losses["L_culture_reg"] = torch.tensor(0.0, device=x.device)
         losses["L_attn_consist"] = self.config.lambda_attn_consist * consist_acc
+        losses["L_halt"] = self.config.lambda_halt * halt_acc
         losses["L_total"] = (
             losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"]
             + losses["L_reg"] + losses["L_sde"] + losses["L_culture_reg"]
-            + losses["L_self_model"] + losses["L_attn_consist"]
+            + losses["L_self_model"] + losses["L_attn_consist"] + losses["L_halt"]
         )
         # L_transition is diagnostic-only (detached, transition.weight receives no gradient).
         # Excluded from L_total to prevent the growing MSE from poisoning total_loss,

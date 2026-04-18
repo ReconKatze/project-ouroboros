@@ -63,6 +63,12 @@ class VariantProfile:
     # Loop 1 output is captured (detached); final output carries the gradients.
     # Self-consistency loss penalises the final output for diverging from loop 1.
     enable_looped_attention: bool = False
+    # Adaptive Computational Time halting for looped attention (requires enable_looped_attention).
+    # Replaces fixed-loop + consistency loss with softmax-weighted combination of loop outputs.
+    # A halt head (Linear(d_model, 1)) per non-anchor-0 anchor predicts confidence per loop.
+    # Ponder cost L_halt = lambda_halt * E[loop_index] encourages early halting.
+    # L_attn_consist is zeroed automatically when this is True (the two mechanisms are incompatible).
+    enable_attn_halting: bool = False
 
 
 @dataclass(frozen=True)
@@ -261,6 +267,7 @@ class LifeEquationConfig:
     # Only used when variant_profile.enable_looped_attention is True.
     n_attn_loops: int = 4                   # Number of attention loop iterations per anchor
     lambda_attn_consist: float = 0.01       # Self-consistency loss weight (final vs loop-1)
+    lambda_halt: float = 0.01              # Ponder cost weight: λ × E[loop_index] per anchor
     variant_profile: Optional[VariantProfile] = None
 
     @property

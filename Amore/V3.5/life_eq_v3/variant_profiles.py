@@ -386,6 +386,29 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         enable_social_relational=True,
         enable_attn_residuals=True,
     ),
+    "round3_looped_act": _profile(
+        "round3_looped_act",
+        "round3_attnres + 4x Looped Attention + Adaptive Computational Time halting. "
+        "Non-anchor-0 attention anchors (layers 12, 24, 35) run up to 4 loops with "
+        "shared weights. A halt head (Linear(d_model, 1)) per anchor scores each loop "
+        "output; softmax over loop steps gives a weighted combination. Ponder cost "
+        "L_halt = lambda_halt * E[loop_index] encourages early halting. No consistency "
+        "loss (L_attn_consist=0 by construction). Matches the core HRM/TRM mechanism "
+        "(arXiv:2506.21734, arXiv:2510.04871). Run alongside round3_looped to isolate "
+        "the benefit of adaptive halting over fixed-loop + consistency loss.",
+        training_focus=("looped_attention", "adaptive_halting", "attn_residuals", "narrative_coherence", "trust_dynamics"),
+        controller_mode="live",
+        enable_narrative=True,
+        enable_sleep_dream=True,
+        enable_trust_dynamics=True,
+        enable_memory_read=True,
+        enable_memory_write=True,
+        enable_memory_consolidation=True,
+        enable_social_relational=True,
+        enable_attn_residuals=True,
+        enable_looped_attention=True,
+        enable_attn_halting=True,
+    ),
     "round3_looped": _profile(
         "round3_looped",
         "Round 3 full config + Block Attention Residuals + 4x Looped Attention. "

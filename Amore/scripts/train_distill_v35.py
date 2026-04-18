@@ -3,14 +3,14 @@
 
 V3.5 changes vs V3:
   - Architecture: d_model=5120, 36 layers (32 Mamba + 4 attention), anchors (0,12,24,35), ~7B params
-  - Teacher: Qwen/Qwen3.6-35B-A3B (MoE; 35B total / 3B active per token; ~5× ratio vs 7B student)
-    Loaded in 4-bit NF4 (bitsandbytes) via --teacher-4bit (default True). At bf16 the teacher
-    alone consumes 70 GB, exceeding A100 capacity; 4-bit brings it to ~22 GB.
+  - Teacher: Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled (27B dense; Claude Opus
+    4.6 reasoning distilled into Qwen3.5-27B). Loaded in 4-bit NF4 (bitsandbytes) via
+    --teacher-4bit (default True). At bf16 the teacher consumes ~54 GB; 4-bit brings it to
+    ~13.5 GB, leaving comfortable headroom alongside the 7B student.
   - Optimizer: 8-bit AdamW (bitsandbytes) via --use-8bit-adam (strongly recommended).
-    Saves ~56 GB of optimizer state vs float32 Adam (7B × 8 bytes → 7B × 2 bytes),
-    enabling 7B student + 35B-A3B teacher to fit within 80 GB A100.
-    VRAM breakdown: teacher ~22 GB + student weights 14 GB + grads 14 GB + 8-bit Adam 14 GB
-    + overhead ~5 GB ≈ 69 GB total.
+    Saves ~56 GB of optimizer state vs float32 Adam (7B × 8 bytes → 7B × 2 bytes).
+    VRAM breakdown: teacher ~13.5 GB + student weights 14 GB + grads 14 GB + 8-bit Adam 14 GB
+    + activations ~5 GB ≈ 61 GB total.
 
 This runner is for diagnosis-heavy distillation. It prints a compact summary for
 each logged step and writes full per-step telemetry bundles containing inputs,
@@ -285,8 +285,8 @@ def save_checkpoint(path: str | Path, payload: dict) -> str:
 def parse_args():
     p = argparse.ArgumentParser(description="V3.5 distillation with full telemetry")
     p.add_argument("--variant", default="round3_full")
-    p.add_argument("--teacher", default="Qwen/Qwen3.6-35B-A3B")
-    p.add_argument("--tokenizer", default="Qwen/Qwen3.6-35B-A3B")
+    p.add_argument("--teacher", default="Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled")
+    p.add_argument("--tokenizer", default="Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--lr", type=float, default=5e-5)
     p.add_argument("--seq-len", type=int, default=1024)

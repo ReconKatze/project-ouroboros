@@ -386,6 +386,26 @@ VARIANT_PROFILES: Dict[str, VariantProfile] = {
         enable_social_relational=True,
         enable_attn_residuals=True,
     ),
+    "round3_looped": _profile(
+        "round3_looped",
+        "Round 3 full config + Block Attention Residuals + 4x Looped Attention. "
+        "Non-anchor-0 attention layers run 4 times with shared weights. "
+        "Loop-1 output is captured detached; final loop carries gradients. "
+        "Self-consistency loss (lambda_attn_consist=0.01) penalises final output "
+        "for diverging from loop-1, encouraging stable iterative refinement. "
+        "Run alongside round3_attnres to isolate the looped-attention contribution.",
+        training_focus=("looped_attention", "attn_residuals", "depth_weighting", "narrative_coherence", "trust_dynamics"),
+        controller_mode="live",
+        enable_narrative=True,
+        enable_sleep_dream=True,
+        enable_trust_dynamics=True,
+        enable_memory_read=True,
+        enable_memory_write=True,
+        enable_memory_consolidation=True,
+        enable_social_relational=True,
+        enable_attn_residuals=True,
+        enable_looped_attention=True,
+    ),
     "cycle7_adversarial": _profile(
         "cycle7_adversarial",
         "Cycle 7: adversarial stress testing — mechanical and constitutional. "

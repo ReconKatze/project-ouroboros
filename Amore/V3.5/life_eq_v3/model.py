@@ -333,6 +333,7 @@ class LifeEquationModel(nn.Module):
         block_summaries: List[torch.Tensor] = []
         attn_anchor_idx = 0
         mamba_idx = 0
+        consist_acc = torch.tensor(0.0, device=x.device)  # L_attn_consist accumulator
         for layer_index in range(self.config.n_layers_total):
             if layer_index in self.config.attention_anchors:
                 # Block AttnRes: before each attention layer that has prior block history,
@@ -343,7 +344,20 @@ class LifeEquationModel(nn.Module):
                     seq = self.attn_res(attn_anchor_idx, block_summaries, seq)
 
                 if not effective_consolidating:
-                    if layer_index == 0:
+                    if self.profile.enable_looped_attention and layer_index != 0:
+                        # Run attention n_attn_loops times with shared weights.
+                        # Capture loop-1 output detached; final output carries gradients.
+                        n_loops = self.config.n_attn_loops
+                        loop_input = seq
+                        seq_loop1: Optional[torch.Tensor] = None
+                        for loop_i in range(n_loops):
+                            loop_out = self.attention_module.guided_sparse_attention(loop_input, step, state.Z_cap)
+                            if loop_i == 0:
+                                seq_loop1 = loop_out.detach()
+                            loop_input = loop_out
+                        seq = loop_out
+                        consist_acc = consist_acc + (seq - seq_loop1).pow(2).mean()
+                    elif layer_index == 0:
                         seq = self.attention_module.plain_attention(seq)
                     else:
                         seq = self.attention_module.guided_sparse_attention(seq, step, state.Z_cap)
@@ -361,11 +375,7 @@ class LifeEquationModel(nn.Module):
             gated_error_trace.append(gated_error_seq.detach().cpu())
             effective_seq_trace.append(effective_seq.detach().cpu())
 
-            # Real Mamba-3: parallel scan over the full sequence.
-            # Gradient checkpointing avoids storing in_proj/SSM activations (~53 MB/layer × 32 = 1.7 GB).
-            raw_mamba_out = torch.utils.checkpoint.checkpoint(
-                self.mamba_layers[mamba_idx], effective_seq, use_reentrant=False
-            )   # [B, seq_len, d_model]
+            raw_mamba_out = self.mamba_layers[mamba_idx](effective_seq)  # [B, seq_len, d_model]
             raw_mamba_out_trace.append(raw_mamba_out.detach().cpu())
 
             # P_soft reconstruction: add the prediction back (the Mamba output represents the
@@ -639,10 +649,11 @@ class LifeEquationModel(nn.Module):
             losses["L_culture_reg"] = self.config.lambda_culture_reg * self.z_culture.pow(2).mean()
         else:
             losses["L_culture_reg"] = torch.tensor(0.0, device=x.device)
+        losses["L_attn_consist"] = self.config.lambda_attn_consist * consist_acc
         losses["L_total"] = (
             losses["L_base"] + losses["L_resume"] + losses["L_noisy"] + losses["L_ctrl"]
             + losses["L_reg"] + losses["L_sde"] + losses["L_culture_reg"]
-            + losses["L_self_model"]
+            + losses["L_self_model"] + losses["L_attn_consist"]
         )
         # L_transition is diagnostic-only (detached, transition.weight receives no gradient).
         # Excluded from L_total to prevent the growing MSE from poisoning total_loss,

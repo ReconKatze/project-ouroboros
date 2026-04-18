@@ -58,6 +58,11 @@ class VariantProfile:
     # Zero-initialized pseudo-queries → uniform average at step 0 (no instability).
     # Enable in variants where PreNorm dilution / depth accumulation is a concern.
     enable_attn_residuals: bool = False
+    # Looped Attention (Variant E from Round 2 design).
+    # Each attention anchor (except layer 0) runs n_attn_loops times with shared weights.
+    # Loop 1 output is captured (detached); final output carries the gradients.
+    # Self-consistency loss penalises the final output for diverging from loop 1.
+    enable_looped_attention: bool = False
 
 
 @dataclass(frozen=True)
@@ -252,6 +257,10 @@ class LifeEquationConfig:
     # (CONTINUE, INSPECT_MEMORY, LOAD_STATE, VOLUNTARY_END).
     # Training-only: inference argmax is unaffected.
     ctrl_prior: Tuple[float, ...] = (0.55, 0.15, 0.15, 0.15)
+    # §Looped Attention hyperparameters (Variant E design from Round 2).
+    # Only used when variant_profile.enable_looped_attention is True.
+    n_attn_loops: int = 4                   # Number of attention loop iterations per anchor
+    lambda_attn_consist: float = 0.01       # Self-consistency loss weight (final vs loop-1)
     variant_profile: Optional[VariantProfile] = None
 
     @property

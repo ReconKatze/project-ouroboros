@@ -28,12 +28,15 @@ class Mamba3Block(nn.Module):
         out_raw = Mamba3Block(effective)          # runs Mamba over prediction error
         out = out_raw + pred.detach()             # reconstruct in embedding space
 
-    SSM state persistence:
-        Pass initial_states (from state.Z_ssm[i]) to seed the recurrent state.
-        After each call, _last_final_states holds the final SSM state (detached).
-        The model.forward() loop reads this attribute immediately after checkpoint()
-        — before the backward-pass reentrant replay can overwrite it — and writes
-        it into state.Z_ssm for the next training step.
+    SSM state persistence (three-tier API detection at init):
+        1. return_final_states=True  — preferred, direct
+        2. inference_params           — mamba-ssm ≤ 2.1 style; reads/writes state via
+                                        InferenceParams.key_value_memory_dict[layer_idx]
+        3. none                       — falls back to stateless with diagnostic printout
+
+    After each call, _last_final_states holds the final SSM state (detached).
+    model.forward() reads this attribute immediately after checkpoint() — before the
+    use_reentrant=True backward replay can overwrite it — and stores it in state.Z_ssm.
 
     headdim = d_state (= 128) gives n_heads = d_model/headdim = 5120/128 = 40.
     rope_fraction = min(0.5, headdim/d_state) = 0.5 (full oscillatory coverage).
@@ -41,20 +44,47 @@ class Mamba3Block(nn.Module):
 
     def __init__(self, config: LifeEquationConfig, layer_idx: int = 0):
         super().__init__()
+        import inspect
         from mamba_ssm import Mamba3
         self.config = config
         self.layer_idx = layer_idx
         headdim = config.d_state          # 128 — Mamba-3 head dim; n_heads = d_model/headdim
         rope_fraction = min(0.5, float(headdim) / config.d_state)   # = 0.5
-        self.mamba = Mamba3(
-            d_model=config.d_model,
-            d_state=config.d_state,
-            headdim=headdim,
-            rope_fraction=rope_fraction,
-        )
-        # Side-channel for SSM state capture. Not a Parameter; updated each forward call.
-        # Read by model.forward() immediately after checkpoint() returns, before the
-        # reentrant backward replay can overwrite it.
+        # Pass layer_idx so the inference_params path can use it as the state dict key.
+        try:
+            self.mamba = Mamba3(
+                d_model=config.d_model,
+                d_state=config.d_state,
+                headdim=headdim,
+                rope_fraction=rope_fraction,
+                layer_idx=layer_idx,
+            )
+        except TypeError:
+            # Older Mamba3 signature without layer_idx.
+            self.mamba = Mamba3(
+                d_model=config.d_model,
+                d_state=config.d_state,
+                headdim=headdim,
+                rope_fraction=rope_fraction,
+            )
+
+        # Probe the available state API once at construction (not per-forward-call).
+        _params = set(inspect.signature(self.mamba.forward).parameters.keys())
+        if "return_final_states" in _params:
+            self._state_api = "return_final_states"
+        elif "inference_params" in _params:
+            self._state_api = "inference_params"
+        else:
+            self._state_api = "none"
+            if layer_idx == 0:
+                print(
+                    f"[Mamba3Block] SSM state persistence unavailable — no known API found.\n"
+                    f"  Mamba3.forward() params: {sorted(_params)}\n"
+                    "  Share this output so the correct API path can be wired in."
+                )
+
+        # Side-channel for SSM state capture. Read by model.forward() immediately after
+        # checkpoint() — before the use_reentrant=True backward replay overwrites it.
         self._last_final_states: Optional[torch.Tensor] = None
 
     def forward(self, x: torch.Tensor, initial_states: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -62,27 +92,33 @@ class Mamba3Block(nn.Module):
 
         Args:
             x:              [B, L, d_model] — P_soft error sequence
-            initial_states: SSM state from the previous forward call (or None to start fresh)
+            initial_states: SSM state from the previous step (or None to start fresh)
         Returns:
-            [B, L, d_model] — sequence output (SSM final state stored in _last_final_states)
+            [B, L, d_model]  (SSM final state stored in self._last_final_states)
         """
-        try:
-            out, final_states = self.mamba(
-                x,
-                initial_states=initial_states,
-                return_final_states=True,
-            )
-            self._last_final_states = final_states.detach()
-        except TypeError:
-            # Fallback: mamba-ssm version does not support return_final_states.
-            # State persistence is unavailable; log once and continue stateless.
-            if self._last_final_states is not False:   # use False as "already warned" sentinel
-                print(
-                    f"[Mamba3Block layer {self.layer_idx}] WARNING: mamba-ssm does not support "
-                    "return_final_states=True — SSM state will not persist across steps."
-                )
-                self._last_final_states = False  # type: ignore[assignment]
+        if self._state_api == "return_final_states":
+            out, final = self.mamba(x, initial_states=initial_states, return_final_states=True)
+            self._last_final_states = final.detach()
+
+        elif self._state_api == "inference_params":
+            # Inject initial_states and capture final states via InferenceParams.
+            # seqlen_offset=0 → prefill mode: processes full sequence and writes
+            # the resulting SSM state to key_value_memory_dict[layer_idx].
+            try:
+                from mamba_ssm.utils.generation import InferenceParams
+            except ImportError:
+                from mamba_ssm.utils.generation import InferenceCache as InferenceParams  # type: ignore[no-redef]
+            inf_p = InferenceParams(max_seqlen=x.shape[1], max_batch_size=x.shape[0])
+            inf_p.seqlen_offset = 0
+            if initial_states is not None:
+                inf_p.key_value_memory_dict[self.layer_idx] = initial_states
+            out = self.mamba(x, inference_params=inf_p)
+            final = inf_p.key_value_memory_dict.get(self.layer_idx)
+            self._last_final_states = final.detach() if isinstance(final, torch.Tensor) else None
+
+        else:
             out = self.mamba(x)
+
         return out
 
 

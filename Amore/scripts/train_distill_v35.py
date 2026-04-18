@@ -2,15 +2,17 @@
 """Single-variant V3.5 distillation with full telemetry capture.
 
 V3.5 changes vs V3:
-  - Architecture: d_model=5120, 36 layers (32 Mamba + 4 attention), anchors (0,12,24,35), ~7B params
+  - Architecture: d_model=5120, 32 layers (28 Mamba + 4 attention), anchors (0,10,21,31), ~6.5B params
   - Teacher: Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled (27B dense; Claude Opus
     4.6 reasoning distilled into Qwen3.5-27B). Loaded in 4-bit NF4 (bitsandbytes) via
     --teacher-4bit (default True). At bf16 the teacher consumes ~54 GB; 4-bit brings it to
-    ~13.5 GB, leaving comfortable headroom alongside the 7B student.
+    ~13.5 GB, leaving comfortable headroom alongside the 6.5B student.
   - Optimizer: 8-bit AdamW (bitsandbytes) via --use-8bit-adam (strongly recommended).
-    Saves ~56 GB of optimizer state vs float32 Adam (7B × 8 bytes → 7B × 2 bytes).
-    VRAM breakdown: teacher ~13.5 GB + student weights 14 GB + grads 14 GB + 8-bit Adam 14 GB
-    + activations ~5 GB ≈ 61 GB total.
+    Saves ~42 GB of optimizer state vs float32 Adam (6.5B × 8 bytes → 6.5B × 2 bytes).
+    VRAM breakdown: teacher ~13.5 GB + student weights ~13 GB + grads ~13 GB + 8-bit Adam ~13 GB
+    + activations ~5 GB ≈ 58 GB total.
+  - Training data: --dataset-mix wiki (default) or diverse (WikiText + C4 + GitHub code +
+    OpenWebMath). Use 'diverse' to better match the teacher's code/reasoning expertise.
 
 This runner is for diagnosis-heavy distillation. It prints a compact summary for
 each logged step and writes full per-step telemetry bundles containing inputs,
@@ -117,11 +119,43 @@ def bitsandbytes_requirement_error(feature_name: str) -> RuntimeError:
     return RuntimeError("\n".join(lines))
 
 
-def make_token_chunks(tokenizer, seq_len: int):
-    ds = load_dataset(
-        "wikitext", "wikitext-103-raw-v1",
-        split="train", streaming=True, trust_remote_code=False,
-    )
+# ── Dataset mix definitions ──────────────────────────────────────────────────
+# Each entry: (hf_path, config_name, hf_split, sampling_weight, text_field)
+# text_field is the key in each example dict that holds the raw text content.
+# Validation always uses WikiText-103 test split regardless of training mix.
+DATASET_MIXES: dict[str, list[tuple]] = {
+    "wiki": [
+        ("wikitext", "wikitext-103-raw-v1", "train", 1.0, "text"),
+    ],
+    "diverse": [
+        ("wikitext",                     "wikitext-103-raw-v1", "train", 0.15, "text"),
+        ("allenai/c4",                   "en",                   "train", 0.35, "text"),
+        ("codeparrot/github-code",       None,                   "train", 0.35, "code"),
+        ("open-web-math/open-web-math",  None,                   "train", 0.15, "text"),
+    ],
+}
+
+
+def make_token_chunks(tokenizer, seq_len: int, dataset_mix: str = "wiki"):
+    from datasets import interleave_datasets as _interleave
+    specs = DATASET_MIXES[dataset_mix]
+
+    if len(specs) == 1:
+        path, name, split, _, text_field = specs[0]
+        ds = load_dataset(path, name, split=split, streaming=True, trust_remote_code=False)
+        ds = ds.map(lambda ex, tf=text_field: {"text": ex.get(tf, "") or ""})
+    else:
+        sub_datasets, weights = [], []
+        for path, name, split, weight, text_field in specs:
+            d = load_dataset(path, name, split=split, streaming=True, trust_remote_code=False)
+            d = d.map(lambda ex, tf=text_field: {"text": ex.get(tf, "") or ""})
+            sub_datasets.append(d)
+            weights.append(weight)
+        total = sum(weights)
+        probs = [w / total for w in weights]
+        ds = _interleave(sub_datasets, probabilities=probs, seed=42,
+                         stopping_strategy="all_exhausted")
+
     buf = []
     for ex in ds:
         text = ex["text"].strip()
@@ -356,6 +390,10 @@ def parse_args():
     p.add_argument("--no-forensics", action="store_true",
                    help="Skip forensic bundle collection and writing each step. "
                         "Console loss output is unaffected. Use when forensic bundles are not needed.")
+    p.add_argument("--dataset-mix", default="wiki", choices=list(DATASET_MIXES),
+                   help="Training data mix. 'wiki': WikiText-103 only (default, original behaviour). "
+                        "'diverse': 15%% WikiText + 35%% C4 + 35%% GitHub code + 15%% OpenWebMath. "
+                        "Validation always uses WikiText-103 test split regardless of this flag.")
     return p.parse_args()
 
 
@@ -470,14 +508,14 @@ def main():
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_schedule)
     scaler = torch.amp.GradScaler("cuda") if use_scaler else None
 
-    data_gen = make_token_chunks(tokenizer, args.seq_len)
+    data_gen = make_token_chunks(tokenizer, args.seq_len, args.dataset_mix)
 
     def next_chunk():
         nonlocal data_gen
         try:
             return next(data_gen)
         except StopIteration:
-            data_gen = make_token_chunks(tokenizer, args.seq_len)
+            data_gen = make_token_chunks(tokenizer, args.seq_len, args.dataset_mix)
             return next(data_gen)
 
     le_state = student.init_state(batch_size=args.batch_size)

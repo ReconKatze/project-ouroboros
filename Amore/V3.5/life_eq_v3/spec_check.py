@@ -6,6 +6,9 @@ from typing import List
 from .config import LifeEquationConfig
 
 
+EXPECTED_V35_ATTENTION_ANCHORS = (0, 12, 24, 35)
+
+
 @dataclass(frozen=True)
 class SpecCheckResult:
     passed: bool
@@ -24,9 +27,11 @@ def validate_locked_conventions(config: LifeEquationConfig) -> SpecCheckResult:
         messages.append("Locked phase ordering diverges from section 29.")
     if "pred_t_output" not in config.detached_paths:
         messages.append("Detached output prediction path missing from section 0.5 policy.")
-    if tuple(config.attention_anchors) != (0, 10, 21, 31):
-        # V3.5: 32-layer architecture re-spaces anchors from (0,9,18,27) to (0,10,21,31).
-        messages.append("Attention anchors diverge from section 0 (V3.5 expects (0, 10, 21, 31)).")
+    if tuple(config.attention_anchors) != EXPECTED_V35_ATTENTION_ANCHORS:
+        messages.append(
+            "Attention anchors diverge from section 0 "
+            f"(V3.5 expects {EXPECTED_V35_ATTENTION_ANCHORS})."
+        )
     if tuple(config.warmup_modules) != ("attention_gain", "friction", "emotion_broadcast"):
         messages.append("Warmup modules diverge from section 0.5 convention 3.")
     # v15 / spec v3 autonomy checks (§0.6)

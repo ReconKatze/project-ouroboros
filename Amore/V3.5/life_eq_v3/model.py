@@ -111,7 +111,7 @@ class LifeEquationModel(nn.Module):
         self.trust_module = TrustModule(self.config)
         # Block Attention Residuals (arXiv:2603.15031). Always instantiated — parameter cost
         # is negligible (4 × d_model = 6 144 scalars). Active only when
-        # profile.enable_attn_residuals=True. n_anchors=4 matches attention_anchors {0,9,18,27}.
+        # profile.enable_attn_residuals=True. n_anchors=4 matches attention_anchors {0,12,24,35}.
         self.attn_res = BlockAttnResidual(self.config, n_anchors=len(self.config.attention_anchors))
         self.store = StateStore(self.config, root_dir=state_store_dir)
 

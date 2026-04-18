@@ -14,7 +14,8 @@ For every parameter in the V3.5 state-dict:
 Layer remapping
 ---------------
   V3  attention anchors : (0,  9, 18, 27)   24 Mamba + 4 attention in 28 layers
-  V3.5 attention anchors: (0, 12, 24, 35)   32 Mamba + 4 attention in 36 layers
+  V3.5 attention anchors: derived from the live V3.5 config
+                          (currently (0, 12, 24, 35) for 32 Mamba + 4 attention in 36 layers)
 
   Attention layers transfer 1-for-1 by anchor position (1st→1st, 2nd→2nd, …).
   Mamba layers cycle: V3.5 Mamba slot i gets V3 Mamba slot (i % 24).
@@ -38,6 +39,7 @@ import os
 import sys
 from dataclasses import replace as dc_replace
 from pathlib import Path
+from typing import Sequence
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -50,25 +52,23 @@ import torch
 
 V3_ATTN_ANCHORS  = (0,  9, 18, 27)
 V3_N_LAYERS      = 28
-
-V35_ATTN_ANCHORS = (0, 12, 24, 35)
-V35_N_LAYERS     = 36
+V3_N_MAMBA_LAYERS = V3_N_LAYERS - len(V3_ATTN_ANCHORS)
 
 
 # ── Layer index mapping ──────────────────────────────────────────────────────
 
-def _build_layer_map() -> dict[int, int]:
-    """Return {v35_layer_idx: v3_layer_idx} for all 36 V3.5 layers."""
+def _build_global_layer_map(v35_attn_anchors: Sequence[int], v35_n_layers: int) -> dict[int, int]:
+    """Return {v35_global_layer_idx: v3_global_layer_idx} for all V3.5 layers."""
     v3_attn  = set(V3_ATTN_ANCHORS)
-    v35_attn = set(V35_ATTN_ANCHORS)
+    v35_attn = set(v35_attn_anchors)
 
     v3_mamba  = [i for i in range(V3_N_LAYERS)  if i not in v3_attn]   # 24
-    v35_mamba = [i for i in range(V35_N_LAYERS) if i not in v35_attn]  # 32
+    v35_mamba = [i for i in range(v35_n_layers) if i not in v35_attn]
 
     mapping: dict[int, int] = {}
 
     # Attention: align by anchor position (0th→0th, 1st→1st, …)
-    for v35_a, v3_a in zip(sorted(V35_ATTN_ANCHORS), sorted(V3_ATTN_ANCHORS)):
+    for v35_a, v3_a in zip(sorted(v35_attn_anchors), sorted(V3_ATTN_ANCHORS)):
         mapping[v35_a] = v3_a
 
     # Mamba: cycle through V3's 24 Mamba layers
@@ -76,6 +76,11 @@ def _build_layer_map() -> dict[int, int]:
         mapping[v35_idx] = v3_mamba[slot % len(v3_mamba)]
 
     return mapping
+
+
+def _build_mamba_slot_map(v35_n_mamba_layers: int) -> dict[int, int]:
+    """Return {v35_mamba_slot_idx: v3_mamba_slot_idx} for all V3.5 Mamba slots."""
+    return {dst_idx: dst_idx % V3_N_MAMBA_LAYERS for dst_idx in range(v35_n_mamba_layers)}
 
 
 # ── Weight transfer ──────────────────────────────────────────────────────────
@@ -105,17 +110,51 @@ def _transfer_tensor(
     return dst, "skip"
 
 
-def _remap_key(key: str, layer_map: dict[int, int]) -> str:
+def _transfer_per_mamba_slot_tensor(
+    src: torch.Tensor,
+    dst: torch.Tensor,
+    slot_map: dict[int, int],
+) -> tuple[torch.Tensor, str]:
+    """Transfer tensors whose leading axis is V3/V3.5 Mamba-slot indexed."""
+    result = dst.clone()
+    dst_slots = dst.shape[0]
+    trailing_slices = tuple(slice(0, min(s, d)) for s, d in zip(src.shape[1:], dst.shape[1:]))
+
+    for dst_slot in range(dst_slots):
+        src_slot = slot_map[dst_slot]
+        result[(dst_slot, *trailing_slices)] = src[(src_slot, *trailing_slices)]
+
+    filled = dst_slots
+    for s, d in zip(src.shape[1:], dst.shape[1:]):
+        filled *= min(s, d)
+    pct = 100.0 * filled / dst.numel()
+    return result, f"slot-remap ({pct:.1f}% filled)"
+
+
+def _count_slot_remap_filled_elems(src: torch.Tensor, dst: torch.Tensor) -> int:
+    filled = dst.shape[0]
+    for s, d in zip(src.shape[1:], dst.shape[1:]):
+        filled *= min(s, d)
+    return filled
+
+
+def _remap_key(
+    key: str,
+    global_layer_map: dict[int, int],
+    mamba_slot_map: dict[int, int],
+) -> str:
     """
-    Rewrite a parameter key's layer index using layer_map.
-    e.g. "layers.12.in_proj.weight" → "layers.9.in_proj.weight" (if 12→9 in map).
-    Returns the original key if it doesn't start with "layers.<int>.".
+    Rewrite a parameter key's layer index using the appropriate mapping.
+    Supports both the old global-layer layout and the current mamba-slot layout.
     """
     parts = key.split(".")
-    if len(parts) >= 2 and parts[0] == "layers" and parts[1].isdigit():
-        v35_idx = int(parts[1])
-        if v35_idx in layer_map:
-            parts[1] = str(layer_map[v35_idx])
+    if len(parts) >= 2 and parts[1].isdigit():
+        idx = int(parts[1])
+        if parts[0] == "layers" and idx in global_layer_map:
+            parts[1] = str(global_layer_map[idx])
+            return ".".join(parts)
+        if parts[0] in {"mamba_layers", "pred_heads"} and idx in mamba_slot_map:
+            parts[1] = str(mamba_slot_map[idx])
             return ".".join(parts)
     return key
 
@@ -149,7 +188,8 @@ def transfer(src_path: str, dst_path: str, variant: str, d_state: int) -> None:
     print(f"V3.5 model   : {n_params_v35 / 1e9:.2f}B parameters\n")
 
     # ── Build layer map ──────────────────────────────────────────────────────
-    layer_map = _build_layer_map()
+    global_layer_map = _build_global_layer_map(config.attention_anchors, config.n_layers_total)
+    mamba_slot_map = _build_mamba_slot_map(config.n_mamba_layers)
 
     # ── Transfer ─────────────────────────────────────────────────────────────
     new_sd: dict[str, torch.Tensor] = {}
@@ -160,19 +200,27 @@ def transfer(src_path: str, dst_path: str, variant: str, d_state: int) -> None:
     params_inherited = 0
 
     for dst_key, dst_tensor in dst_sd.items():
-        src_key = _remap_key(dst_key, layer_map)
+        src_key = _remap_key(dst_key, global_layer_map, mamba_slot_map)
 
         if src_key in src_sd:
-            result, status = _transfer_tensor(src_sd[src_key], dst_tensor)
+            if dst_key == "w_mod_to_layer":
+                result, status = _transfer_per_mamba_slot_tensor(src_sd[src_key], dst_tensor, mamba_slot_map)
+            else:
+                result, status = _transfer_tensor(src_sd[src_key], dst_tensor)
             new_sd[dst_key] = result
 
             if status == "exact":
                 n_exact += 1
                 params_inherited += dst_tensor.numel()
-            elif status.startswith("padded"):
+            elif status.startswith("padded") or status.startswith("slot-remap"):
                 n_padded += 1
-                params_inherited += src_sd[src_key].numel()
-                print(f"  padded  {dst_key}")
+                if status.startswith("slot-remap"):
+                    params_inherited += _count_slot_remap_filled_elems(src_sd[src_key], dst_tensor)
+                    label = "  mapped  "
+                else:
+                    params_inherited += min(src_sd[src_key].numel(), dst_tensor.numel())
+                    label = "  padded  "
+                print(f"{label}{dst_key}")
                 print(f"          {list(src_sd[src_key].shape)} → {list(dst_tensor.shape)}  "
                       f"[{status}]")
             else:

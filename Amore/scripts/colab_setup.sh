@@ -31,14 +31,22 @@ pip install causal-conv1d --no-build-isolation
 # 4. Real Mamba kernels — install from git source to get Mamba3
 #    PyPI release (2.3.1) does not export Mamba3; git source does.
 #    MAMBA_FORCE_BUILD=TRUE forces CUDA extension compilation from source.
-#    NOTE: mamba-ssm git source upgrades torch; step 4b re-aligns torchvision.
+#    IMPORTANT: use --no-deps so pip does not upgrade Colab's torch to a CUDA 13 wheel.
 echo "[4/6] mamba-ssm (from git source, includes Mamba3)..."
 MAMBA_FORCE_BUILD=TRUE pip install --no-cache-dir --force-reinstall \
-  git+https://github.com/state-spaces/mamba.git --no-build-isolation
+  git+https://github.com/state-spaces/mamba.git --no-build-isolation --no-deps
 
-# 4b. Re-align torchvision after mamba-ssm upgrades torch.
-echo "[4b] torchvision (re-align with mamba-ssm torch version)..."
-pip install torchvision -U -q
+# 4b. Verify torch stayed on the Colab runtime build.
+echo "[4b] verify torch CUDA build..."
+python - <<'PY'
+import sys
+import torch
+print("  torch:", torch.__version__, "cuda:", torch.version.cuda)
+if torch.version.cuda and str(torch.version.cuda).startswith("13"):
+    print("ERROR: torch was upgraded to a CUDA 13 build. Restart the runtime and rerun setup.", file=sys.stderr)
+    print("Cause: a package install upgraded torch beyond the Colab runtime CUDA libraries.", file=sys.stderr)
+    sys.exit(1)
+PY
 
 # 5. bitsandbytes — required for V3.5 4-bit teacher loading and 8-bit Adam.
 echo "[5/6] bitsandbytes..."

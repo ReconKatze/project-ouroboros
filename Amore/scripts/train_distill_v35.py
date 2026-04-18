@@ -83,6 +83,15 @@ def bitsandbytes_requirement_error(feature_name: str) -> RuntimeError:
         f"torch.__version__={torch.__version__}",
         f"torch.version.cuda={torch.version.cuda}",
     ]
+    if torch.version.cuda and str(torch.version.cuda).startswith("13"):
+        lines.append(
+            "torch is on a CUDA 13 build. In Colab this usually means a package install "
+            "upgraded torch away from the runtime-supported CUDA stack."
+        )
+        lines.append(
+            "Rebuild the environment from a fresh runtime and ensure mamba-ssm is installed "
+            "with --no-deps so it does not upgrade torch."
+        )
     if _BNB_IMPORT_ERROR is not None:
         lines.append(f"bitsandbytes import error: {_BNB_IMPORT_ERROR}")
         if "libnvJitLink.so.13" in str(_BNB_IMPORT_ERROR):

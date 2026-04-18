@@ -120,6 +120,12 @@ class LifeEquationModel(nn.Module):
         self.halt_heads = nn.ModuleList([
             nn.Linear(self.config.d_model, 1) for _ in range(n_loopable)
         ])
+        # Zero-init so halt_w starts uniform [1/n_loops, ...] at step 0.
+        # Random kaiming init on a d_model=5120 input gives logit std ≈ 1.4, which can
+        # produce skewed softmax before any training and bias early halt decisions.
+        for hh in self.halt_heads:
+            nn.init.zeros_(hh.weight)
+            nn.init.zeros_(hh.bias)
         self.store = StateStore(self.config, root_dir=state_store_dir)
 
     def _zeros(self, batch: int, width: int, device: torch.device) -> torch.Tensor:
@@ -365,7 +371,10 @@ class LifeEquationModel(nn.Module):
                             loop_outputs: List[torch.Tensor] = []
                             halt_logits: List[torch.Tensor] = []
                             for _ in range(n_loops):
-                                loop_out = self.attention_module.guided_sparse_attention(loop_in, step, state.Z_cap)
+                                # Residual: loop_in + attn(loop_in). Without residual the
+                                # raw attention operator applied 4× can have spectral radius
+                                # > 1 and amplify hidden states to overflow in bfloat16.
+                                loop_out = loop_in + self.attention_module.guided_sparse_attention(loop_in, step, state.Z_cap)
                                 loop_outputs.append(loop_out)
                                 halt_logits.append(self.halt_heads[halt_idx](loop_out[:, -1, :]))  # [B, 1]
                                 loop_in = loop_out
@@ -378,7 +387,7 @@ class LifeEquationModel(nn.Module):
                             loop_input = seq
                             seq_loop1: Optional[torch.Tensor] = None
                             for loop_i in range(n_loops):
-                                loop_out = self.attention_module.guided_sparse_attention(loop_input, step, state.Z_cap)
+                                loop_out = loop_input + self.attention_module.guided_sparse_attention(loop_input, step, state.Z_cap)
                                 if loop_i == 0:
                                     seq_loop1 = loop_out.detach()
                                 loop_input = loop_out

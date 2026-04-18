@@ -577,13 +577,13 @@ def main():
             print(f"forensic bundle saved: {event_dir}")
 
     for step in range(start_step + 1, args.steps + 1):
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
         pre_state = detach_state(le_state)
         pre_epi_index = le_state.epi_index
         input_ids = torch.stack([next_chunk() for _ in range(args.batch_size)]).to(device)
         with torch.no_grad():
             teacher_last = teacher(input_ids=input_ids, use_cache=False).logits[:, -1, :].float()
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
 
         autocast_ctx = (
             torch.amp.autocast("cuda", dtype=amp_dtype)

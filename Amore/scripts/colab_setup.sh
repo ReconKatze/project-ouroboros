@@ -55,9 +55,8 @@ PY
 echo "[5/6] bitsandbytes..."
 pip install -q bitsandbytes
 
-# 6. Flash attention — A100 supports this natively; improves attention layer throughput.
-echo "[6/6] flash-attn (A100 native, soft-fail if build fails)..."
-pip install flash-attn --no-build-isolation || echo "  flash-attn failed — skipping (not required)"
+# 6. Flash attention — skipped. Build takes 10+ minutes and is not required.
+echo "[6/6] flash-attn — skipped (not required)."
 
 echo ""
 echo "=== Setup complete ==="

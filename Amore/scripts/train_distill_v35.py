@@ -400,8 +400,11 @@ def parse_args():
 def main():
     args = parse_args()
     # Set before the CUDA allocator is initialized (first tensor-to-device call).
-    # expandable_segments prevents fragmentation from causing spurious OOM.
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    # expandable_segments prevents fragmentation from causing spurious OOM when the
+    # 27B teacher's dequantization passes fragment the allocator cache.
+    # Both names: PyTorch ≤2.1 uses PYTORCH_CUDA_ALLOC_CONF; 2.2+ uses PYTORCH_ALLOC_CONF.
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     amp_dtype = get_amp_dtype()
     use_scaler = amp_dtype == torch.float16

@@ -381,8 +381,15 @@ def main():
     print(f"Telemetry dir: {args.telemetry_dir}")
     print(f"Forensic dir: {args.forensic_dir}")
 
+    # Load tokenizer first so we can size the student's embedding/output_head correctly.
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer_vocab_size = len(tokenizer)
+    print(f"Tokenizer: {args.tokenizer} — vocab_size={tokenizer_vocab_size}")
+
     config = build_config(args.variant)
-    config = replace(config, d_state=args.d_state, device=str(device))
+    config = replace(config, d_state=args.d_state, device=str(device), vocab_size=tokenizer_vocab_size)
     student = build_model(args.variant, config, state_store_dir=args.state_store_dir).to(device)
     student.train()
 
@@ -405,10 +412,6 @@ def main():
     teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
-
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     val_chunks: list = []
     need_val = args.eval_every > 0 or args.ab_eval_every > 0 or args.reload_test_every > 0
@@ -462,7 +465,21 @@ def main():
 
     if args.resume and os.path.exists(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
-        student.load_state_dict(ckpt["model_state"], strict=False)
+        ckpt_sd = ckpt["model_state"]
+        # Expand any checkpoint tensors whose vocab dimension grew (embed.weight, output_head.weight).
+        # New-token rows are small-random so they don't bias training; existing rows carry warm-init.
+        model_sd = student.state_dict()
+        for key, ckpt_val in list(ckpt_sd.items()):
+            if key not in model_sd:
+                continue
+            model_shape = model_sd[key].shape
+            ckpt_shape = ckpt_val.shape
+            if ckpt_shape != model_shape and len(ckpt_shape) >= 1 and ckpt_shape[1:] == model_shape[1:] and ckpt_shape[0] < model_shape[0]:
+                new_weight = torch.randn(model_shape, dtype=ckpt_val.dtype) * 0.02
+                new_weight[:ckpt_shape[0]] = ckpt_val
+                ckpt_sd[key] = new_weight
+                print(f"  vocab expand: {key} {list(ckpt_shape)} → {list(model_shape)}")
+        student.load_state_dict(ckpt_sd, strict=False)
         if "optimizer_state" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer_state"])
             # load_state_dict maps everything to CPU; move optimizer moments back to device

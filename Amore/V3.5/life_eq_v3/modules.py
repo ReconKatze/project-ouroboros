@@ -28,13 +28,14 @@ class Mamba3Block(nn.Module):
         out_raw = Mamba3Block(effective)          # runs Mamba over prediction error
         out = out_raw + pred.detach()             # reconstruct in embedding space
 
-    No persistent SSM state is injected across calls in this implementation — the
-    Mamba-3 state resets per forward call.  Cross-call cognitive context is carried
-    by alongside state (Z_eps, Z_att, Z_cog layer outputs, episodic memory).
-    TODO(colab): verify initial_states / return_final_states API on mamba-ssm git
-    source and wire Z_cog to actual Mamba-3 SSM state for full spec compliance.
+    SSM state persistence:
+        Pass initial_states (from state.Z_ssm[i]) to seed the recurrent state.
+        After each call, _last_final_states holds the final SSM state (detached).
+        The model.forward() loop reads this attribute immediately after checkpoint()
+        — before the backward-pass reentrant replay can overwrite it — and writes
+        it into state.Z_ssm for the next training step.
 
-    headdim = d_state (= 64) gives n_heads = d_model/headdim = 1536/64 = 24.
+    headdim = d_state (= 128) gives n_heads = d_model/headdim = 5120/128 = 40.
     rope_fraction = min(0.5, headdim/d_state) = 0.5 (full oscillatory coverage).
     """
 
@@ -43,7 +44,7 @@ class Mamba3Block(nn.Module):
         from mamba_ssm import Mamba3
         self.config = config
         self.layer_idx = layer_idx
-        headdim = config.d_state          # 64 — standard Mamba-3 head dim; n_heads = d_model/headdim
+        headdim = config.d_state          # 128 — Mamba-3 head dim; n_heads = d_model/headdim
         rope_fraction = min(0.5, float(headdim) / config.d_state)   # = 0.5
         self.mamba = Mamba3(
             d_model=config.d_model,
@@ -51,16 +52,38 @@ class Mamba3Block(nn.Module):
             headdim=headdim,
             rope_fraction=rope_fraction,
         )
+        # Side-channel for SSM state capture. Not a Parameter; updated each forward call.
+        # Read by model.forward() immediately after checkpoint() returns, before the
+        # reentrant backward replay can overwrite it.
+        self._last_final_states: Optional[torch.Tensor] = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Sequence-mode Mamba-3 forward.
+    def forward(self, x: torch.Tensor, initial_states: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Sequence-mode Mamba-3 forward with SSM state persistence.
 
         Args:
-            x: [B, L, d_model] — pre-processed effective input (P_soft error + modulation)
+            x:              [B, L, d_model] — P_soft error sequence
+            initial_states: SSM state from the previous forward call (or None to start fresh)
         Returns:
-            [B, L, d_model]
+            [B, L, d_model] — sequence output (SSM final state stored in _last_final_states)
         """
-        return self.mamba(x)
+        try:
+            out, final_states = self.mamba(
+                x,
+                initial_states=initial_states,
+                return_final_states=True,
+            )
+            self._last_final_states = final_states.detach()
+        except TypeError:
+            # Fallback: mamba-ssm version does not support return_final_states.
+            # State persistence is unavailable; log once and continue stateless.
+            if self._last_final_states is not False:   # use False as "already warned" sentinel
+                print(
+                    f"[Mamba3Block layer {self.layer_idx}] WARNING: mamba-ssm does not support "
+                    "return_final_states=True — SSM state will not persist across steps."
+                )
+                self._last_final_states = False  # type: ignore[assignment]
+            out = self.mamba(x)
+        return out
 
 
 class IdentityModule(nn.Module):

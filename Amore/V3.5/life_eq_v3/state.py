@@ -54,6 +54,10 @@ class FullState:
     Z_sdm: Optional[torch.Tensor] = None       # [B, d_sdm] — GRU hidden state
     Z_sdm_pred: Optional[torch.Tensor] = None  # [B, 4] — predicted (d_id, eps, c_cont, v_self) for t
     prev_action_idx: int = 0                    # index of action taken at t-1 (ControllerModule.ACTIONS)
+    # Mamba-3 SSM recurrent state: one tensor per Mamba layer, carried across forward calls.
+    # None until the first forward call; shape is [B, n_heads, d_state, d_head] per layer
+    # (exact shape determined by mamba-ssm at runtime).
+    Z_ssm: Optional[List[Optional[torch.Tensor]]] = None
 
     def clone(self) -> "FullState":
         return FullState(
@@ -89,6 +93,9 @@ class FullState:
             Z_sdm=None if self.Z_sdm is None else self.Z_sdm.clone(),
             Z_sdm_pred=None if self.Z_sdm_pred is None else self.Z_sdm_pred.clone(),
             prev_action_idx=self.prev_action_idx,
+            Z_ssm=None if self.Z_ssm is None else [
+                t.clone() if t is not None else None for t in self.Z_ssm
+            ],
         )
 
 

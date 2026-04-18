@@ -179,9 +179,41 @@ def kl_distill_loss(student_logits: torch.Tensor, teacher_logits: torch.Tensor, 
 
 
 def detach_state(state: FullState) -> FullState:
-    return FullState(
-        **{k: (v.detach() if isinstance(v, torch.Tensor) else v) for k, v in vars(state).items()}
-    )
+    result = {}
+    for k, v in vars(state).items():
+        if isinstance(v, torch.Tensor):
+            result[k] = v.detach()
+        elif k == "Z_ssm" and v is not None:
+            # Z_ssm is a list of Optional[Tensor]; each tensor is already detached
+            # when stored in Mamba3Block._last_final_states, so pass through unchanged.
+            result[k] = v
+        else:
+            result[k] = v
+    return FullState(**result)
+
+
+def _serialize_le_state(state: FullState) -> dict:
+    result = {}
+    for k, v in vars(state).items():
+        if isinstance(v, torch.Tensor):
+            result[k] = v.detach().cpu()
+        elif k == "Z_ssm" and v is not None:
+            result[k] = [t.detach().cpu() if t is not None else None for t in v]
+        else:
+            result[k] = v
+    return result
+
+
+def _deserialize_le_state(saved: dict, device: torch.device) -> FullState:
+    result = {}
+    for k, v in saved.items():
+        if isinstance(v, torch.Tensor):
+            result[k] = v.to(device)
+        elif k == "Z_ssm" and v is not None:
+            result[k] = [t.to(device) if t is not None else None for t in v]
+        else:
+            result[k] = v
+    return FullState(**result)
 
 
 _STATE_NORM_CAP = 10.0  # max per-vector norm for any carried state tensor
@@ -297,7 +329,7 @@ def checkpoint_payload(
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
-        "le_state": {k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v) for k, v in vars(le_state).items()},
+        "le_state": _serialize_le_state(le_state),
         "best_loss": best_loss,
         "val_log": val_log if val_log is not None else {},
         "ema_loss": ema_loss,
@@ -576,10 +608,7 @@ def main():
                         param_state[k] = v.to(device)
         saved_le = ckpt.get("le_state", {})
         if saved_le:
-            le_state = FullState(**{
-                k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-                for k, v in saved_le.items()
-            })
+            le_state = _deserialize_le_state(saved_le, device)
             le_state.manifest = []   # manifest is ephemeral; rebuilt fresh each run
         start_step = ckpt.get("step", 0)
         best_loss = ckpt.get("best_loss", float("inf"))
@@ -671,10 +700,7 @@ def main():
                     for k, v in param_state.items():
                         if isinstance(v, torch.Tensor):
                             param_state[k] = v.to(device)
-                best_le_state = FullState(**{
-                    k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-                    for k, v in recovery["le_state"].items()
-                })
+                best_le_state = _deserialize_le_state(recovery["le_state"], device)
                 archive = student.store.voluntary_consolidation(best_le_state)
                 le_state = student.store.spawn_successor(archive, batch_size=args.batch_size)
                 print(f"step={step} | action=VOLUNTARY_END | weights restored (step {recovery['step']}, best_loss={best_loss:.4f}) | successor spawned")

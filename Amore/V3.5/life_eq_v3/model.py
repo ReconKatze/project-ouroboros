@@ -336,6 +336,7 @@ class LifeEquationModel(nn.Module):
         friction_b = friction.unsqueeze(1)    # [B, 1, d_model]
 
         new_cog_slots: List[torch.Tensor] = []   # accumulates [B, d_model] per Mamba layer
+        new_ssm_states: List[Optional[torch.Tensor]] = []  # final SSM state per Mamba layer
         gated_error_trace: List[torch.Tensor] = []
         effective_seq_trace: List[torch.Tensor] = []
         raw_mamba_out_trace: List[torch.Tensor] = []
@@ -348,6 +349,11 @@ class LifeEquationModel(nn.Module):
         mamba_idx = 0
         consist_acc = torch.tensor(0.0, device=x.device)  # L_attn_consist accumulator
         halt_acc = torch.tensor(0.0, device=x.device)     # L_halt ponder cost accumulator
+        # SSM initial states for this forward: previous step's final states, or None on first call.
+        _ssm_initial: List[Optional[torch.Tensor]] = (
+            state.Z_ssm if state.Z_ssm is not None
+            else [None] * self.config.n_mamba_layers
+        )
         for layer_index in range(self.config.n_layers_total):
             if layer_index in self.config.attention_anchors:
                 # Block AttnRes: before each attention layer that has prior block history,
@@ -413,9 +419,15 @@ class LifeEquationModel(nn.Module):
 
             # use_reentrant=True: re-runs the forward under autograd rather than using
             # saved-tensor hooks, so it doesn't conflict with Mamba-3's own ctx.saved_tensors.
+            # Pass initial_states so Mamba-3's SSM starts from where the last step left off.
+            # _last_final_states is read immediately after the checkpoint call (still in the
+            # forward pass), before the reentrant backward replay can overwrite it.
+            _init_ssm = _ssm_initial[mamba_idx]
             raw_mamba_out = torch.utils.checkpoint.checkpoint(
-                self.mamba_layers[mamba_idx], effective_seq, use_reentrant=True
+                self.mamba_layers[mamba_idx], effective_seq, _init_ssm, use_reentrant=True
             )  # [B, seq_len, d_model]
+            _cap = self.mamba_layers[mamba_idx]._last_final_states
+            new_ssm_states.append(_cap if isinstance(_cap, torch.Tensor) else None)
             raw_mamba_out_trace.append(raw_mamba_out.detach().cpu())
 
             # P_soft reconstruction: add the prediction back (the Mamba output represents the
@@ -441,6 +453,10 @@ class LifeEquationModel(nn.Module):
 
         # Stack into [B, n_mamba_layers, d_model] — the new cognitive state
         state.Z_cog = torch.stack(new_cog_slots, dim=1)
+        # Persist Mamba-3 SSM recurrent state across forward calls.
+        # Only update if at least one layer successfully captured a state (not the fallback path).
+        if any(s is not None for s in new_ssm_states):
+            state.Z_ssm = new_ssm_states
         # Current-step final output: last layer's last token
         layer_input = seq[:, -1, :]                                # [B, d_model]
         # Soft norm clamp: 24 stacked Mamba-3 blocks can amplify activations

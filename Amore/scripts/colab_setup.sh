@@ -17,8 +17,11 @@ echo "=== Installing Project Amore dependencies (Colab Pro / A100) ==="
 # 1. transformers only — Colab already has PyTorch with CUDA pre-installed.
 #    DO NOT pip install torch here: PyPI ships CPU-only torch and clobbers Colab's
 #    CUDA torch, which causes causal-conv1d/mamba-ssm compilation to fail.
-echo "[1/6] transformers + datasets (torch already present in Colab)..."
-pip install -q transformers datasets
+#
+#    Install from git source (not PyPI) because Qwen3.6-35B-A3B uses the
+#    'qwen3_5_moe' architecture type, which is not in any released PyPI wheel yet.
+echo "[1/6] transformers (git source, for Qwen3 support) + datasets..."
+pip install -q "git+https://github.com/huggingface/transformers.git" datasets
 
 # 2. Build tools required by mamba-ssm and causal-conv1d
 echo "[2/6] Build tools (packaging, ninja)..."

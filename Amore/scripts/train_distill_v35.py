@@ -2,11 +2,15 @@
 """Single-variant V3.5 distillation with full telemetry capture.
 
 V3.5 changes vs V3:
-  - Architecture: d_model=3072, 32 layers (28 Mamba + 4 attention), anchors (0,10,21,31)
-  - Teacher: Qwen2.5-Coder-14B (4.7× ratio vs 3B student; was 7B / ~0.9B in V3)
-  - Optimizer: optional 8-bit AdamW (bitsandbytes) via --use-8bit-adam
-    Saves ~18 GB of optimizer state vs float32 Adam, enabling 3B student + 14B teacher
-    to fit within 80 GB A100 without gradient checkpointing.
+  - Architecture: d_model=5120, 36 layers (32 Mamba + 4 attention), anchors (0,12,24,35), ~7B params
+  - Teacher: Qwen/Qwen3.6-35B-A3B (MoE; 35B total / 3B active per token; ~5× ratio vs 7B student)
+    Loaded in 4-bit NF4 (bitsandbytes) via --teacher-4bit (default True). At bf16 the teacher
+    alone consumes 70 GB, exceeding A100 capacity; 4-bit brings it to ~22 GB.
+  - Optimizer: 8-bit AdamW (bitsandbytes) via --use-8bit-adam (strongly recommended).
+    Saves ~56 GB of optimizer state vs float32 Adam (7B × 8 bytes → 7B × 2 bytes),
+    enabling 7B student + 35B-A3B teacher to fit within 80 GB A100.
+    VRAM breakdown: teacher ~22 GB + student weights 14 GB + grads 14 GB + 8-bit Adam 14 GB
+    + overhead ~5 GB ≈ 69 GB total.
 
 This runner is for diagnosis-heavy distillation. It prints a compact summary for
 each logged step and writes full per-step telemetry bundles containing inputs,
@@ -32,7 +36,7 @@ sys.path.insert(0, os.path.join(ROOT, "V3.5"))
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 try:
     import bitsandbytes as bnb
@@ -231,8 +235,8 @@ def save_checkpoint(path: str | Path, payload: dict) -> str:
 def parse_args():
     p = argparse.ArgumentParser(description="V3.5 distillation with full telemetry")
     p.add_argument("--variant", default="round3_full")
-    p.add_argument("--teacher", default="Qwen/Qwen2.5-Coder-14B")
-    p.add_argument("--tokenizer", default="Qwen/Qwen2.5-Coder-14B")
+    p.add_argument("--teacher", default="Qwen/Qwen3.6-35B-A3B")
+    p.add_argument("--tokenizer", default="Qwen/Qwen3.6-35B-A3B")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--lr", type=float, default=5e-5)
     p.add_argument("--seq-len", type=int, default=1024)
@@ -291,8 +295,13 @@ def parse_args():
                         "seeding it here makes drift tracking live in round3_full and beyond.")
     p.add_argument("--use-8bit-adam", action="store_true",
                    help="Use bitsandbytes AdamW8bit instead of torch AdamW. "
-                        "Saves ~18 GB of optimizer state (float32 → uint8 quantised moments), "
-                        "required to fit 3B student + 14B teacher within 80 GB A100. "
+                        "Saves ~56 GB of optimizer state for 7B student (float32 → uint8 moments). "
+                        "Strongly recommended with Qwen3.6-35B-A3B teacher. "
+                        "Requires: pip install bitsandbytes")
+    p.add_argument("--teacher-4bit", action="store_true", default=True,
+                   help="Load teacher in 4-bit NF4 quantization (bitsandbytes). "
+                        "Required for 35B teacher on A100 80 GB: bf16 alone consumes 70 GB. "
+                        "Disable only if using a small teacher that fits in bf16. "
                         "Requires: pip install bitsandbytes")
     return p.parse_args()
 
@@ -327,7 +336,22 @@ def main():
     student = build_model(args.variant, config, state_store_dir=args.state_store_dir).to(device)
     student.train()
 
-    teacher = AutoModelForCausalLM.from_pretrained(args.teacher, torch_dtype=amp_dtype).to(device)
+    if args.teacher_4bit:
+        if not _BNB_AVAILABLE:
+            raise RuntimeError("--teacher-4bit requires bitsandbytes: pip install bitsandbytes")
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=amp_dtype,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+        teacher = AutoModelForCausalLM.from_pretrained(
+            args.teacher, quantization_config=bnb_cfg, device_map="auto"
+        )
+        print(f"Teacher: {args.teacher} (4-bit NF4, device_map=auto)")
+    else:
+        teacher = AutoModelForCausalLM.from_pretrained(args.teacher, torch_dtype=amp_dtype).to(device)
+        print(f"Teacher: {args.teacher} ({amp_dtype})")
     teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)

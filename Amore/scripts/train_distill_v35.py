@@ -463,24 +463,27 @@ def main():
     if args.resume and os.path.exists(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
         student.load_state_dict(ckpt["model_state"], strict=False)
-        optimizer.load_state_dict(ckpt["optimizer_state"])
-        # load_state_dict maps everything to CPU; move optimizer moments back to device
-        for param_state in optimizer.state.values():
-            for k, v in param_state.items():
-                if isinstance(v, torch.Tensor):
-                    param_state[k] = v.to(device)
+        if "optimizer_state" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state"])
+            # load_state_dict maps everything to CPU; move optimizer moments back to device
+            for param_state in optimizer.state.values():
+                for k, v in param_state.items():
+                    if isinstance(v, torch.Tensor):
+                        param_state[k] = v.to(device)
         saved_le = ckpt.get("le_state", {})
-        le_state = FullState(**{
-            k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-            for k, v in saved_le.items()
-        })
-        le_state.manifest = []   # manifest is ephemeral; rebuilt fresh each run
+        if saved_le:
+            le_state = FullState(**{
+                k: (v.to(device) if isinstance(v, torch.Tensor) else v)
+                for k, v in saved_le.items()
+            })
+            le_state.manifest = []   # manifest is ephemeral; rebuilt fresh each run
         start_step = ckpt.get("step", 0)
         best_loss = ckpt.get("best_loss", float("inf"))
         val_log = {int(k): v for k, v in ckpt.get("val_log", {}).items()}
         ema_loss = ckpt.get("ema_loss", None)
         last_completed_step = start_step
-        print(f"Resumed from step {start_step}: {args.resume}")
+        warm_init = "optimizer_state" not in ckpt
+        print(f"{'Warm-init' if warm_init else 'Resumed'} from step {start_step}: {args.resume}")
         if "scheduler_state" in ckpt and ckpt["scheduler_state"] is not None:
             scheduler.load_state_dict(ckpt["scheduler_state"])
 

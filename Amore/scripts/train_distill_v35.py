@@ -353,6 +353,9 @@ def parse_args():
                         "Required for 35B teacher on A100 80 GB: bf16 alone consumes 70 GB. "
                         "Disable only if using a small teacher that fits in bf16. "
                         "Requires: pip install bitsandbytes")
+    p.add_argument("--no-forensics", action="store_true",
+                   help="Skip forensic bundle collection and writing each step. "
+                        "Console loss output is unaffected. Use when forensic bundles are not needed.")
     return p.parse_args()
 
 
@@ -409,6 +412,7 @@ def main():
             with torch.amp.autocast("cuda", dtype=amp_dtype):
                 _dummy_out = student(_dummy_ids, state=_dummy_state, step=0)
             _dummy_out.logits.sum().backward()
+            del _dummy_ids, _dummy_state, _dummy_out  # free GPU tensors before teacher loads
         except Exception as e:
             print(f"  Pre-warm failed (non-fatal): {e}")
         student.zero_grad(set_to_none=True)
@@ -558,19 +562,6 @@ def main():
         runner.record_train_step(step, outputs, pre_epi_index)
 
         if outputs.state is None:
-            full_snapshot = build_full_forensic_snapshot(
-                step=step,
-                variant_name=args.variant,
-                input_ids=input_ids,
-                teacher_logits=teacher_last,
-                student_logits=outputs.logits.float() if outputs.logits is not None else None,
-                pre_state=pre_state,
-                post_state=outputs.state,
-                outputs=outputs,
-                total_loss=None,
-                kl_loss=None,
-                grad_norms=None,
-            )
             manifest = {
                 "event_type": "voluntary_end",
                 "trigger_name": "voluntary_end",
@@ -590,8 +581,22 @@ def main():
                     event_manifest=manifest,
                 ),
             )
-            forensic.start_event(manifest, full_snapshot, post_steps_override=0)
-            flush_finished_events(forensic.finalize_all(), event_ckpt)
+            if not args.no_forensics:
+                vol_snapshot = build_full_forensic_snapshot(
+                    step=step,
+                    variant_name=args.variant,
+                    input_ids=input_ids,
+                    teacher_logits=teacher_last,
+                    student_logits=outputs.logits.float() if outputs.logits is not None else None,
+                    pre_state=pre_state,
+                    post_state=outputs.state,
+                    outputs=outputs,
+                    total_loss=None,
+                    kl_loss=None,
+                    grad_norms=None,
+                )
+                forensic.start_event(manifest, vol_snapshot, post_steps_override=0)
+                flush_finished_events(forensic.finalize_all(), event_ckpt)
             # Restore best weights + spawn successor from predecessor identity/values
             best_ckpt_path = Path(args.best_out)
             if best_ckpt_path.exists():
@@ -622,19 +627,6 @@ def main():
         prev_kl = kl.detach()
         total_loss = kl + outputs.losses["L_total"]
         if not torch.isfinite(total_loss):
-            full_snapshot = build_full_forensic_snapshot(
-                step=step,
-                variant_name=args.variant,
-                input_ids=input_ids,
-                teacher_logits=teacher_last,
-                student_logits=outputs.logits.float(),
-                pre_state=pre_state,
-                post_state=outputs.state,
-                outputs=outputs,
-                total_loss=total_loss,
-                kl_loss=kl,
-                grad_norms=None,
-            )
             manifest = {
                 "event_type": "nonfinite_failure",
                 "trigger_name": "nonfinite_loss",
@@ -654,8 +646,22 @@ def main():
                     event_manifest=manifest,
                 ),
             )
-            forensic.start_event(manifest, full_snapshot, post_steps_override=0)
-            flush_finished_events(forensic.finalize_all(), event_ckpt)
+            if not args.no_forensics:
+                nf_snapshot = build_full_forensic_snapshot(
+                    step=step,
+                    variant_name=args.variant,
+                    input_ids=input_ids,
+                    teacher_logits=teacher_last,
+                    student_logits=outputs.logits.float(),
+                    pre_state=pre_state,
+                    post_state=outputs.state,
+                    outputs=outputs,
+                    total_loss=total_loss,
+                    kl_loss=kl,
+                    grad_norms=None,
+                )
+                forensic.start_event(manifest, nf_snapshot, post_steps_override=0)
+                flush_finished_events(forensic.finalize_all(), event_ckpt)
             print(f"step={step} | non-finite loss, stopping")
             break
 
@@ -709,32 +715,34 @@ def main():
             )
             print(f"periodic checkpoint saved: {periodic_path}")
 
-        replay_entry = build_lightweight_replay_entry(
-            step=step,
-            input_ids=input_ids,
-            teacher_logits=teacher_last,
-            student_logits=outputs.logits.float(),
-            pre_state=pre_state,
-            post_state=outputs.state,
-            outputs=outputs,
-            total_loss=total_loss,
-            kl_loss=kl,
-        )
-        forensic.append_replay_entry(replay_entry)
-
-        full_snapshot = build_full_forensic_snapshot(
-            step=step,
-            variant_name=args.variant,
-            input_ids=input_ids,
-            teacher_logits=teacher_last,
-            student_logits=outputs.logits.float(),
-            pre_state=pre_state,
-            post_state=outputs.state,
-            outputs=outputs,
-            total_loss=total_loss,
-            kl_loss=kl,
-            grad_norms=grad_snapshot,
-        )
+        if not args.no_forensics:
+            replay_entry = build_lightweight_replay_entry(
+                step=step,
+                input_ids=input_ids,
+                teacher_logits=teacher_last,
+                student_logits=outputs.logits.float(),
+                pre_state=pre_state,
+                post_state=outputs.state,
+                outputs=outputs,
+                total_loss=total_loss,
+                kl_loss=kl,
+            )
+            forensic.append_replay_entry(replay_entry)
+            full_snapshot = build_full_forensic_snapshot(
+                step=step,
+                variant_name=args.variant,
+                input_ids=input_ids,
+                teacher_logits=teacher_last,
+                student_logits=outputs.logits.float(),
+                pre_state=pre_state,
+                post_state=outputs.state,
+                outputs=outputs,
+                total_loss=total_loss,
+                kl_loss=kl,
+                grad_norms=grad_snapshot,
+            )
+        else:
+            full_snapshot = None
         last_completed_step = step
 
         total_loss_value = float(total_loss.detach().item())
@@ -771,19 +779,18 @@ def main():
                 f"  steps={reload_summary['n_steps_run']}"
             )
 
-        triggered_events = forensic.evaluate_triggers(
-            step=step,
-            outputs=outputs,
-            total_loss=total_loss_value,
-            kl_loss=kl_value,
-        )
+        triggered_events: list = []
         event_checkpoint_path: str | None = None
-        for manifest in triggered_events:
-            manifest["step"] = step
-            # No model checkpoint per forensic event — bundles (LE state + scalars) are
-            # sufficient for diagnosis. Full checkpoints only at --checkpoint-every,
-            # --best-out, VOLUNTARY_END, and nonfinite_loss (handled separately above).
-            forensic.start_event(manifest, full_snapshot)
+        if not args.no_forensics:
+            triggered_events = forensic.evaluate_triggers(
+                step=step,
+                outputs=outputs,
+                total_loss=total_loss_value,
+                kl_loss=kl_value,
+            )
+            for manifest in triggered_events:
+                manifest["step"] = step
+                forensic.start_event(manifest, full_snapshot)
 
         if total_loss_value < best_loss:
             best_loss = total_loss_value
@@ -809,10 +816,14 @@ def main():
                     event_manifest=best_manifest,
                 ),
             )
-            forensic.start_event(best_manifest, full_snapshot, post_steps_override=0)
+            if not args.no_forensics:
+                forensic.start_event(best_manifest, full_snapshot, post_steps_override=0)
             event_checkpoint_path = best_path
 
-        flush_finished_events(forensic.append_post_step(full_snapshot), event_checkpoint_path)
+        if not args.no_forensics and full_snapshot is not None:
+            flush_finished_events(forensic.append_post_step(full_snapshot), event_checkpoint_path)
+        else:
+            flush_finished_events([], event_checkpoint_path)
 
         if step % args.log_every == 0 or step == 1:
             snapshot = {
@@ -860,7 +871,8 @@ def main():
             event_manifest={"event_type": "final_checkpoint", "trigger_name": "final_checkpoint", "severity": "warning", "step": last_completed_step},
         ),
     )
-    flush_finished_events(forensic.finalize_all(), final_path)
+    if not args.no_forensics:
+        flush_finished_events(forensic.finalize_all(), final_path)
     print(f"checkpoint saved: {final_path}")
 
 

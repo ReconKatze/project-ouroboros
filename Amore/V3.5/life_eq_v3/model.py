@@ -200,8 +200,8 @@ class LifeEquationModel(nn.Module):
             error_s = x - pred_s.detach()                          # [B, seq_len, d_model]
             pred_seqs.append(pred_s)
             raw_errors_seqs.append(error_s)
-            pred_seq_trace.append(pred_s.detach())
-            error_seq_trace.append(error_s.detach())
+            pred_seq_trace.append(pred_s.detach().cpu())
+            error_seq_trace.append(error_s.detach().cpu())
             if seq_len > 1:
                 pred_loss = pred_loss + nn.functional.mse_loss(pred_s[:, 1:], x[:, 1:].detach())
             else:
@@ -210,7 +210,7 @@ class LifeEquationModel(nn.Module):
         raw_errors_tensor = torch.stack([e[:, -1, :] for e in raw_errors_seqs], dim=1)
         losses["L_pred"] = pred_loss
         diagnostics["input_ids"] = input_ids.detach()
-        diagnostics["embedded_sequence"] = x.detach()
+        diagnostics["embedded_sequence"] = x.detach().cpu()
         diagnostics["token_embedding_t"] = x_t.detach()
         diagnostics["raw_errors_last"] = raw_errors_tensor.detach()
         diagnostics["pred_seq_trace"] = pred_seq_trace
@@ -358,17 +358,20 @@ class LifeEquationModel(nn.Module):
             error_seq = raw_errors_seqs[mamba_idx]                 # [B, seq_len, d_model]
             gated_error_seq = att_gain_b * error_seq - friction_b  # attention-gated error
             effective_seq = (1.0 - warmup) * error_seq + warmup * gated_error_seq  # [B, seq_len, d_model]
-            gated_error_trace.append(gated_error_seq.detach())
-            effective_seq_trace.append(effective_seq.detach())
+            gated_error_trace.append(gated_error_seq.detach().cpu())
+            effective_seq_trace.append(effective_seq.detach().cpu())
 
             # Real Mamba-3: parallel scan over the full sequence.
-            raw_mamba_out = self.mamba_layers[mamba_idx](effective_seq)   # [B, seq_len, d_model]
-            raw_mamba_out_trace.append(raw_mamba_out.detach())
+            # Gradient checkpointing avoids storing in_proj/SSM activations (~53 MB/layer × 32 = 1.7 GB).
+            raw_mamba_out = torch.utils.checkpoint.checkpoint(
+                self.mamba_layers[mamba_idx], effective_seq, use_reentrant=False
+            )   # [B, seq_len, d_model]
+            raw_mamba_out_trace.append(raw_mamba_out.detach().cpu())
 
             # P_soft reconstruction: add the prediction back (the Mamba output represents the
             # correction; pred_seqs captures the predictable component of the input).
             mamba_out_seq = raw_mamba_out + pred_seqs[mamba_idx].detach()  # [B, seq_len, d_model]
-            mamba_out_seq_trace.append(mamba_out_seq.detach())
+            mamba_out_seq_trace.append(mamba_out_seq.detach().cpu())
 
             # Emotion-driven modulation of this layer's output (broadcast across seq_len)
             if self.profile.enable_emotion:

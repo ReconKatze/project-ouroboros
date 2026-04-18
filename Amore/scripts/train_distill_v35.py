@@ -358,6 +358,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # Set before the CUDA allocator is initialized (first tensor-to-device call).
+    # expandable_segments prevents fragmentation from causing spurious OOM.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     amp_dtype = get_amp_dtype()
     use_scaler = amp_dtype == torch.float16
@@ -392,6 +395,25 @@ def main():
     config = replace(config, d_state=args.d_state, device=str(device), vocab_size=tokenizer_vocab_size)
     student = build_model(args.variant, config, state_store_dir=args.state_store_dir).to(device)
     student.train()
+
+    # Pre-warm the Triton backward autotuner BEFORE loading the teacher.
+    # With only the student in VRAM (~14 GB), the autotuner has ~60+ GB of headroom
+    # instead of ~5-10 GB during the first real training step.  Cached kernel configs
+    # are reused for the rest of training, so this one-time cost pays for itself.
+    if device.type == "cuda":
+        print(f"Pre-warming Triton backward kernels (seq_len={args.seq_len}, batch={args.batch_size})...")
+        torch.cuda.empty_cache()
+        try:
+            _dummy_ids = torch.zeros(args.batch_size, args.seq_len, dtype=torch.long, device=device)
+            _dummy_state = student.init_state(batch_size=args.batch_size)
+            with torch.amp.autocast("cuda", dtype=amp_dtype):
+                _dummy_out = student(_dummy_ids, state=_dummy_state, step=0)
+            _dummy_out.logits.sum().backward()
+        except Exception as e:
+            print(f"  Pre-warm failed (non-fatal): {e}")
+        student.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
+        print("  Triton warmup done.")
 
     if args.teacher_4bit:
         if not _BNB_AVAILABLE:

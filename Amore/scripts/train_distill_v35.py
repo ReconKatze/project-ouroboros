@@ -466,14 +466,18 @@ def main():
         print("  Triton warmup done.")
 
     if args.teacher_cpu:
-        # Load teacher in bfloat16 on CPU. Frees ~22 GB GPU VRAM at the cost of
-        # slower per-step teacher inference (one 1024-token prefill on CPU).
-        # Requires ~54 GB system RAM for a 27B model.
+        # Weights live in CPU RAM; accelerate's cpu_offload moves each layer to GPU
+        # just-in-time for computation then back to CPU. Only ~1.5 GB of teacher
+        # weights occupy VRAM at any moment instead of ~22 GB. CUDA-only ops
+        # (causal_conv1d etc.) still run on GPU so no kernel errors.
+        # Requires ~54 GB system RAM for a 27B bfloat16 model.
+        from accelerate import cpu_offload as _accel_cpu_offload
         teacher = AutoModelForCausalLM.from_pretrained(
             args.teacher, torch_dtype=torch.bfloat16
         )
-        teacher_device = torch.device("cpu")
-        print(f"Teacher: {args.teacher} (bfloat16, CPU — GPU VRAM freed)")
+        _accel_cpu_offload(teacher, execution_device=device, offload_buffers=True)
+        teacher_device = device  # inputs stay on GPU; hooks handle weight transfers
+        print(f"Teacher: {args.teacher} (bfloat16, CPU-offloaded via accelerate — ~1.5 GB GPU peak per layer)")
     elif args.teacher_4bit:
         if not _BNB_AVAILABLE:
             raise bitsandbytes_requirement_error("--teacher-4bit")

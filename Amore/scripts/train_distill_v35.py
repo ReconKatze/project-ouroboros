@@ -21,7 +21,8 @@ norms.
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
+import io
 import os
 import sys
 from pathlib import Path
@@ -38,10 +39,18 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+_BNB_IMPORT_ERROR: Exception | None = None
+_BNB_IMPORT_LOG = ""
 try:
-    import bitsandbytes as bnb
+    _bnb_stdout = io.StringIO()
+    _bnb_stderr = io.StringIO()
+    with redirect_stdout(_bnb_stdout), redirect_stderr(_bnb_stderr):
+        import bitsandbytes as bnb
+    _BNB_IMPORT_LOG = (_bnb_stdout.getvalue() + _bnb_stderr.getvalue()).strip()
     _BNB_AVAILABLE = True
-except ImportError:
+except Exception as exc:
+    _BNB_IMPORT_ERROR = exc
+    _BNB_IMPORT_LOG = (_bnb_stdout.getvalue() + _bnb_stderr.getvalue()).strip()
     _BNB_AVAILABLE = False
 
 from life_eq_v3.factory import build_config, build_model
@@ -65,6 +74,38 @@ def get_amp_dtype() -> torch.dtype:
     if torch.cuda.is_bf16_supported():
         return torch.bfloat16
     return torch.float16
+
+
+def bitsandbytes_requirement_error(feature_name: str) -> RuntimeError:
+    """Build a concrete, actionable bitsandbytes failure message."""
+    lines = [
+        f"{feature_name} requires bitsandbytes, but bitsandbytes could not be loaded.",
+        f"torch.__version__={torch.__version__}",
+        f"torch.version.cuda={torch.version.cuda}",
+    ]
+    if _BNB_IMPORT_ERROR is not None:
+        lines.append(f"bitsandbytes import error: {_BNB_IMPORT_ERROR}")
+        if "libnvJitLink.so.13" in str(_BNB_IMPORT_ERROR):
+            lines.append(
+                "This usually means the current PyTorch/bitsandbytes stack is targeting CUDA 13, "
+                "but the runtime does not provide the CUDA 13 nvJitLink library."
+            )
+            lines.append(
+                "Rebuild the Colab environment so torch and bitsandbytes match the runtime CUDA "
+                "toolchain before rerunning V3.5 training."
+            )
+    lines.append(
+        "Verify the environment first with: "
+        "python -c \"import torch; print(torch.__version__, torch.version.cuda)\""
+    )
+    lines.append(
+        "Then verify bitsandbytes with: "
+        "python -c \"import bitsandbytes as bnb; print(bnb.__version__)\""
+    )
+    if _BNB_IMPORT_LOG:
+        lines.append("bitsandbytes import log:")
+        lines.append(_BNB_IMPORT_LOG)
+    return RuntimeError("\n".join(lines))
 
 
 def make_token_chunks(tokenizer, seq_len: int):
@@ -298,7 +339,7 @@ def parse_args():
                         "Saves ~56 GB of optimizer state for 7B student (float32 → uint8 moments). "
                         "Strongly recommended with Qwen3.6-35B-A3B teacher. "
                         "Requires: pip install bitsandbytes")
-    p.add_argument("--teacher-4bit", action="store_true", default=True,
+    p.add_argument("--teacher-4bit", action=argparse.BooleanOptionalAction, default=True,
                    help="Load teacher in 4-bit NF4 quantization (bitsandbytes). "
                         "Required for 35B teacher on A100 80 GB: bf16 alone consumes 70 GB. "
                         "Disable only if using a small teacher that fits in bf16. "
@@ -338,7 +379,7 @@ def main():
 
     if args.teacher_4bit:
         if not _BNB_AVAILABLE:
-            raise RuntimeError("--teacher-4bit requires bitsandbytes: pip install bitsandbytes")
+            raise bitsandbytes_requirement_error("--teacher-4bit")
         bnb_cfg = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=amp_dtype,
@@ -376,7 +417,7 @@ def main():
     trainable_params = [p for p in student.parameters() if p.requires_grad]
     if args.use_8bit_adam:
         if not _BNB_AVAILABLE:
-            raise RuntimeError("--use-8bit-adam requires bitsandbytes: pip install bitsandbytes")
+            raise bitsandbytes_requirement_error("--use-8bit-adam")
         optimizer = bnb.optim.AdamW8bit(trainable_params, lr=args.lr, weight_decay=0.01)
         print("Optimizer: AdamW8bit (bitsandbytes) — ~18 GB saved vs float32 Adam")
     else:

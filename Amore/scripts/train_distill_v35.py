@@ -130,7 +130,7 @@ DATASET_MIXES: dict[str, list[tuple]] = {
     "diverse": [
         ("wikitext",                     "wikitext-103-raw-v1", "train", 0.15, "text"),
         ("allenai/c4",                   "en",                   "train", 0.35, "text"),
-        ("codeparrot/github-code",       None,                   "train", 0.35, "code"),
+        ("HuggingFaceFW/fineweb",         "CC-MAIN-2024-10",      "train", 0.35, "text"),
         ("open-web-math/open-web-math",  None,                   "train", 0.15, "text"),
     ],
 }

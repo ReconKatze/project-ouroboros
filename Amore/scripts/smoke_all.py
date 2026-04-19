@@ -22,7 +22,7 @@ import traceback
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "V3"))
+sys.path.insert(0, os.path.join(ROOT, "V3.8"))
 
 import torch
 
@@ -75,12 +75,12 @@ def final_summary() -> int:
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_imports():
-    from life_eq_v3 import (                        # noqa: F401
+    from life_eq_v38 import (                        # noqa: F401
         LifeEquationConfig, VariantProfile,
         build_config, build_model,
         FullState, zero_state, StateStore,
     )
-    from life_eq_v3.modules import (                # noqa: F401
+    from life_eq_v38.modules import (                # noqa: F401
         SelfDynamicsModel,
         NarrativeModule,
         SleepModule,
@@ -93,7 +93,7 @@ def test_imports():
         EvaluationReport, build_evaluation_report,
     )
     from chimera.evaluation.runner import EvalRunner  # noqa: F401
-    from life_eq_v3.maturity_gate import (            # noqa: F401
+    from life_eq_v38.maturity_gate import (            # noqa: F401
         MaturityGate, GateThresholds, MaturityReport,
     )
 
@@ -103,8 +103,8 @@ def test_imports():
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_sdm_shapes():
-    from life_eq_v3 import build_config
-    from life_eq_v3.modules import SelfDynamicsModel
+    from life_eq_v38 import build_config
+    from life_eq_v38.modules import SelfDynamicsModel
 
     config = build_config("phase1_core_dynamics")
     sdm    = SelfDynamicsModel(config)
@@ -137,8 +137,8 @@ def test_sdm_shapes():
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_fullstate_backward_compat():
-    from life_eq_v3 import build_config
-    from life_eq_v3.state import zero_state, FullState
+    from life_eq_v38 import build_config
+    from life_eq_v38.state import zero_state, FullState
 
     config = build_config("phase1_core_dynamics")
     full   = zero_state(batch_size=1, config=config)
@@ -202,8 +202,8 @@ def test_eval_runner_report():
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_narrative_module():
-    from life_eq_v3 import build_config
-    from life_eq_v3.modules import NarrativeModule
+    from life_eq_v38 import build_config
+    from life_eq_v38.modules import NarrativeModule
 
     config = build_config("phase1_core_dynamics")
     module = NarrativeModule(config)
@@ -246,8 +246,8 @@ def test_narrative_module():
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_sleep_module():
-    from life_eq_v3 import build_config
-    from life_eq_v3.modules import SleepModule
+    from life_eq_v38 import build_config
+    from life_eq_v38.modules import SleepModule
 
     config = build_config("phase1_core_dynamics")
     module = SleepModule(config)
@@ -282,8 +282,8 @@ def test_sleep_module():
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_dream_module():
-    from life_eq_v3 import build_config, zero_state
-    from life_eq_v3.modules import DreamModule
+    from life_eq_v38 import build_config, zero_state
+    from life_eq_v38.modules import DreamModule
 
     config = build_config("phase1_core_dynamics")
     module = DreamModule(config)
@@ -322,8 +322,8 @@ def test_dream_module():
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_trust_module():
-    from life_eq_v3 import build_config
-    from life_eq_v3.modules import TrustModule
+    from life_eq_v38 import build_config
+    from life_eq_v38.modules import TrustModule
 
     config = build_config("phase1_core_dynamics")
     module = TrustModule(config)
@@ -363,8 +363,8 @@ def test_integration_round3(teacher, device, amp_dtype):
     """Verify NarrativeModule, SleepModule/DreamModule, TrustModule fire
     without error and produce sensible state updates."""
     import torch.nn.functional as F
-    from life_eq_v3.factory import build_config, build_model
-    from life_eq_v3.state import FullState
+    from life_eq_v38.factory import build_config, build_model
+    from life_eq_v38.state import FullState
     from dataclasses import replace as dc_replace
 
     config  = build_config("round3_narrative_sleep_trust")
@@ -427,8 +427,8 @@ def test_integration_round3(teacher, device, amp_dtype):
 # ──────────────────────────────────────────────────────────────────────────── #
 
 def test_integration_no_sdm(teacher, device, amp_dtype):
-    from life_eq_v3.factory import build_config, build_model
-    from life_eq_v3.state import FullState
+    from life_eq_v38.factory import build_config, build_model
+    from life_eq_v38.state import FullState
     from dataclasses import replace
 
     config  = build_config("phase1_core_dynamics")
@@ -469,8 +469,8 @@ def test_integration_no_sdm(teacher, device, amp_dtype):
 
 def test_integration_with_sdm(teacher, device, amp_dtype):
     import torch.nn.functional as F
-    from life_eq_v3.factory import build_config, build_model
-    from life_eq_v3.state import FullState
+    from life_eq_v38.factory import build_config, build_model
+    from life_eq_v38.state import FullState
     from dataclasses import replace as dc_replace
 
     config  = build_config("phase1_core_dynamics")

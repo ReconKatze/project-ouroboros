@@ -226,6 +226,10 @@ def clip_state_norms(state: FullState) -> FullState:
     Z_eps, Z_homeo, etc.) compounding across thousands of steps.  Tensors whose
     norm is already ≤ _STATE_NORM_CAP are untouched; larger tensors are rescaled
     to exactly _STATE_NORM_CAP.  Non-tensor fields (ints, lists, None) pass through.
+    Z_ssm (List[Optional[Tensor]]) is handled entry-by-entry: each SSM hidden-state
+    tensor [B, n_heads, d_state, d_head] is per-vector-clamped along the last dim.
+    Without this, the Mamba-3 SSM state can accumulate across steps with no bound,
+    causing the kernel to produce NaN/Inf on step 3+ of training.
     """
     capped: dict = {}
     for k, v in vars(state).items():
@@ -234,6 +238,17 @@ def clip_state_norms(state: FullState) -> FullState:
             norms = v.norm(dim=-1, keepdim=True)
             scale = (_STATE_NORM_CAP / norms.clamp(min=1e-6)).clamp(max=1.0)
             capped[k] = v * scale
+        elif k == "Z_ssm" and v is not None:
+            # Clamp each layer's SSM hidden state [B, n_heads, d_state, d_head] per last-dim vector.
+            clamped_ssm = []
+            for t in v:
+                if isinstance(t, torch.Tensor) and t.is_floating_point() and t.ndim >= 1:
+                    norms = t.norm(dim=-1, keepdim=True)
+                    scale = (_STATE_NORM_CAP / norms.clamp(min=1e-6)).clamp(max=1.0)
+                    clamped_ssm.append(t * scale)
+                else:
+                    clamped_ssm.append(t)
+            capped[k] = clamped_ssm
         else:
             capped[k] = v
     return FullState(**capped)

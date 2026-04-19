@@ -594,11 +594,14 @@ class ControllerModule(nn.Module):
         # so the bias never clears.  Sampling diversifies actions proportional to learned
         # probabilities during training while preserving deterministic greedy behavior at
         # inference (eval/deployment).
-        probs = F.softmax(scores, dim=-1)
+        # Cast to float32 before softmax/multinomial: bfloat16 softmax can underflow
+        # to exact zeros or propagate NaN from overflow, crashing torch.multinomial.
+        scores_f = scores.float()
+        probs = F.softmax(scores_f, dim=-1)
         if self.training:
             action_idx = int(torch.multinomial(probs[0], 1).item())
         else:
-            action_idx = int(scores.argmax(dim=-1)[0].item())
+            action_idx = int(scores_f.argmax(dim=-1)[0].item())
         # KL-to-prior regularization: pulls policy toward a CONTINUE-biased prior
         # instead of maximising uniform entropy.  KL(p || prior) is zero when
         # p == prior and positive elsewhere; subtracting -KL in L_ctrl becomes
@@ -609,9 +612,9 @@ class ControllerModule(nn.Module):
         # several steps its rivals' probabilities → 0, giving probs.log() = -inf,
         # and 0 * (-inf) = NaN that corrupts the backward through L_ctrl.
         # F.log_softmax(scores) is finite for all finite logits, avoiding that case.
-        log_probs = F.log_softmax(scores, dim=-1)
+        log_probs = F.log_softmax(scores_f, dim=-1)
         log_prior = torch.tensor(
-            list(self.config.ctrl_prior), dtype=probs.dtype, device=probs.device
+            list(self.config.ctrl_prior), dtype=torch.float32, device=probs.device
         ).log()
         entropy = -(probs * (log_probs - log_prior)).sum(dim=-1).mean()
         return self.ACTIONS[action_idx], trigger, fire, entropy

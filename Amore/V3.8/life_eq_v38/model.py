@@ -469,7 +469,7 @@ class LifeEquationModel(nn.Module):
             # which otherwise cause downstream NaN at step 3+ via SSM transient blow-up.
             with torch.no_grad():
                 _rmo_n = raw_mamba_out.norm(dim=-1, keepdim=True)
-                _rmo_scale = (10.0 * float(self.config.d_model) ** 0.5 / _rmo_n.clamp(min=1e-6)).clamp(max=1.0)
+                _rmo_scale = (float(self.config.d_model) ** 0.5 / _rmo_n.clamp(min=1e-6)).clamp(max=1.0)
             raw_mamba_out = raw_mamba_out * _rmo_scale
             raw_mamba_out_trace.append(raw_mamba_out.detach().cpu())
 

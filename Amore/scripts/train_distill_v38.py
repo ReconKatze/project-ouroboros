@@ -780,16 +780,30 @@ def main():
         if accum_steps == args.grad_accum:
             if use_scaler:
                 scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
-            grad_snapshot = gradient_norms(student)
-            if use_scaler:
-                scaler.step(optimizer)
-                scaler.update()
+            total_grad_norm = torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
+            if not torch.isfinite(total_grad_norm):
+                # Non-finite grad norm means the backward pass produced NaN/Inf (most
+                # likely from use_reentrant=True checkpoint re-running the Mamba kernel
+                # with non-deterministic bfloat16 reduction order).  Skip this optimizer
+                # step, revert state to pre-step, and continue — do NOT stop training.
+                print(f"step={step} | non-finite grad norm ({float(total_grad_norm):.4g}) — skipping update, reverting state")
+                optimizer.zero_grad(set_to_none=True)
+                if use_scaler:
+                    scaler.update()
+                le_state = pre_state
+                prev_layer_input = None
+                prev_kl = None
+                accum_steps = 0
             else:
-                optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-            scheduler.step()
-            accum_steps = 0
+                grad_snapshot = gradient_norms(student)
+                if use_scaler:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                scheduler.step()
+                accum_steps = 0
 
         if args.consolidate_every > 0 and step % args.consolidate_every == 0:
             with torch.no_grad():

@@ -404,6 +404,7 @@ def test_integration_round3(teacher, device, amp_dtype):
         ) * 4.0
         total = kl + out.losses.get("L_total", torch.tensor(0.0, device=device))
         total.backward()
+        torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
         optimizer.step()
         optimizer.zero_grad()
 
@@ -529,6 +530,7 @@ def test_integration_with_sdm(teacher, device, amp_dtype):
         ) * 4.0
         total = kl + out.losses.get("L_total", torch.tensor(0.0, device=device))
         total.backward()
+        torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
         optimizer.step()
         optimizer.zero_grad()
 

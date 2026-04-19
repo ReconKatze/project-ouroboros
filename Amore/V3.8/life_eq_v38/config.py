@@ -277,7 +277,7 @@ class LifeEquationConfig:
     # T_identity: first n_identity_mamba Mamba blocks use slow decay (A_log→0) + low rope_fraction.
     # Creates a stable identity-anchored subspace in the early layers.
     n_identity_mamba: int = 8
-    identity_rope_fraction: float = 0.1   # vs 0.5 for standard blocks
+    identity_rope_fraction: float = 0.5   # mamba-ssm only allows [0.5, 1.0]; T_identity uses A_log→0 instead
     # Sal_surprise: sigmoid(alpha_sal * ||error|| / sqrt(d_model)) multiplies the Mamba gate.
     # Intrinsic curiosity boost: error ≈ 0 → weight ≈ 0.5; large error → weight → 1.0.
     alpha_sal: float = 3.0

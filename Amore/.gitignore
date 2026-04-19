@@ -12,3 +12,7 @@ project ouroboros.docx
 # Codex/memory scratch files
 codex_memory.md
 .codex/
+
+# Legacy versions — kept locally, not tracked on GitHub
+V3/
+V3.5/

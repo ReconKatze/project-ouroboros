@@ -42,11 +42,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _AMORE = os.path.dirname(os.path.dirname(_HERE))
 if _AMORE not in sys.path:
     sys.path.insert(0, _AMORE)
-_V3 = os.path.join(_AMORE, "V3")
-if _V3 not in sys.path:
-    sys.path.insert(0, _V3)
+_V38 = os.path.join(_AMORE, "V3.8")
+if _V38 not in sys.path:
+    sys.path.insert(0, _V38)
 
-from life_eq_v3.maturity_gate import (
+from life_eq_v38.maturity_gate import (
     MaturityGate,
     MaturityReport,
     GateThresholds,
@@ -85,7 +85,7 @@ def _kl_distill_loss(
 
 def _clone_state(state):
     """Detached tensor clone of a FullState."""
-    from life_eq_v3.state import FullState
+    from life_eq_v38.state import FullState
     return FullState(**{
         k: (v.detach().clone() if isinstance(v, torch.Tensor) else v)
         for k, v in vars(state).items()

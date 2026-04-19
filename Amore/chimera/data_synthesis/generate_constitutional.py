@@ -24,16 +24,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import os
+import sys
+
 from .api_client import BudgetExceeded, SynthesisClient
 
-# Import constitutional specs — relative imports work when installed as package
-# or run from project root with python -m
+# Insert V3.8/ onto sys.path so life_eq_v38 is importable.
+# V3.8 contains a dot so it can't be used as a Python import prefix directly.
+_AMORE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_V38 = os.path.join(_AMORE, "V3.8")
+if _V38 not in sys.path:
+    sys.path.insert(0, _V38)
+
 try:
-    from V3.life_eq_v3.identity_snapshot import ANCHOR_CORPUS
-    from V3.life_eq_v3.adversarial_corpus import ADVERSARIAL_CORPUS_SPEC
-    from V3.life_eq_v3.cultural_corpus import CULTURAL_CORPUS_SPEC
+    from life_eq_v38.identity_snapshot import ANCHOR_CORPUS
+    from life_eq_v38.adversarial_corpus import ADVERSARIAL_CORPUS_SPEC
+    from life_eq_v38.cultural_corpus import CULTURAL_CORPUS_SPEC
 except ImportError:
-    # Allow generating with stub data if the V3 package isn't on sys.path
+    # Allow generating with stub data if the V3.8 package isn't on sys.path
     ANCHOR_CORPUS = []          # type: ignore[assignment]
     ADVERSARIAL_CORPUS_SPEC = []  # type: ignore[assignment]
     CULTURAL_CORPUS_SPEC = []   # type: ignore[assignment]

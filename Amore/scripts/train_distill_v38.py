@@ -571,6 +571,28 @@ def main():
     for p in teacher.parameters():
         p.requires_grad_(False)
 
+    # Sanity-check the teacher before starting: if it produces NaN on a dummy input
+    # we catch it now rather than after 30+ wasted steps.
+    print("Teacher health check...")
+    with torch.no_grad():
+        _hc_ids = torch.zeros(1, min(64, args.seq_len), dtype=torch.long).to(teacher_device)
+        try:
+            _hc_out = teacher(input_ids=_hc_ids, use_cache=False).logits[:, -1, :].float()
+            if not torch.isfinite(_hc_out).all():
+                raise RuntimeError(
+                    f"Teacher produced non-finite logits on dummy input "
+                    f"({int((~torch.isfinite(_hc_out)).sum())} elements NaN/Inf). "
+                    "The model checkpoint may be corrupt or incompatible with this accelerate setup."
+                )
+            print(f"  Teacher OK — logit range [{_hc_out.min().item():.3g}, {_hc_out.max().item():.3g}]")
+        except RuntimeError as _hc_e:
+            raise
+        except Exception as _hc_e:
+            print(f"  Teacher health check failed ({_hc_e}), continuing anyway.")
+        finally:
+            del _hc_ids
+            torch.cuda.empty_cache()
+
     val_chunks: list = []
     need_val = args.eval_every > 0 or args.ab_eval_every > 0 or args.reload_test_every > 0
     if need_val:
@@ -673,14 +695,26 @@ def main():
         pre_state = detach_state(le_state)
         pre_epi_index = le_state.epi_index
         input_ids = torch.stack([next_chunk() for _ in range(args.batch_size)]).to(device)
-        with torch.no_grad():
-            _t_ids = input_ids if teacher_device == device else input_ids.to(teacher_device)
-            teacher_last = teacher(input_ids=_t_ids, use_cache=False).logits[:, -1, :].float().to(device)
-        # CPU-offloaded 27B teachers occasionally produce NaN logits on specific batches
-        # (bfloat16 accumulation in accelerate hooks).  Skip rather than train on bad signal.
-        if not torch.isfinite(teacher_last).all():
-            n_bad = int((~torch.isfinite(teacher_last)).sum())
-            print(f"step={step} | teacher NaN/Inf logits ({n_bad} elements) — skipping step")
+        # Teacher forward with retry: CPU-offloaded bfloat16 can produce NaN when GPU memory
+        # is fragmented (e.g. after VOLUNTARY_END's load_state_dict).  Retrying with a fresh
+        # batch after an empty_cache() usually clears it within 1-2 tries.
+        _teacher_retries = 3
+        teacher_last = None
+        for _try in range(_teacher_retries + 1):
+            with torch.no_grad():
+                _t_ids = input_ids if teacher_device == device else input_ids.to(teacher_device)
+                _tl = teacher(input_ids=_t_ids, use_cache=False).logits[:, -1, :].float().to(device)
+            if torch.isfinite(_tl).all():
+                teacher_last = _tl
+                break
+            n_bad = int((~torch.isfinite(_tl)).sum())
+            if _try < _teacher_retries:
+                print(f"step={step} | teacher NaN/Inf ({n_bad} elements), retry {_try+1}/{_teacher_retries} — empty_cache + resample")
+                torch.cuda.empty_cache()
+                input_ids = torch.stack([next_chunk() for _ in range(args.batch_size)]).to(device)
+            else:
+                print(f"step={step} | teacher NaN/Inf ({n_bad} elements) after {_teacher_retries} retries — skipping step")
+        if teacher_last is None:
             continue
 
         autocast_ctx = (

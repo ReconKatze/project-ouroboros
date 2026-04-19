@@ -596,7 +596,9 @@ class ControllerModule(nn.Module):
         # inference (eval/deployment).
         # Cast to float32 before softmax/multinomial: bfloat16 softmax can underflow
         # to exact zeros or propagate NaN from overflow, crashing torch.multinomial.
-        scores_f = scores.float()
+        # nan_to_num: if upstream activations are NaN (e.g. early training instability),
+        # fall back to near-uniform logits so multinomial never receives an invalid tensor.
+        scores_f = scores.float().nan_to_num(nan=0.0, posinf=10.0, neginf=-10.0)
         probs = F.softmax(scores_f, dim=-1)
         if self.training:
             action_idx = int(torch.multinomial(probs[0], 1).item())

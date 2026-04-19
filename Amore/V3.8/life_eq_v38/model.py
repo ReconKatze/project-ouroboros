@@ -461,12 +461,6 @@ class LifeEquationModel(nn.Module):
             )  # [B, seq_len, d_model]
             _cap = self.mamba_layers[mamba_idx]._last_final_states
             new_ssm_states.append(_cap if isinstance(_cap, torch.Tensor) else None)
-            # Norm clamp raw Mamba output per position before reconstruction.
-            # Mirrors the clamps on cog_slot and layer_input: sqrt(d_model) ≈ 71.6 for d_model=5120.
-            # Without this, accumulated SSM state from prior steps can cause the kernel to
-            # produce large outputs that overflow through the pred_seqs addition at step 3+.
-            _rmo_norm = raw_mamba_out.norm(dim=-1, keepdim=True)
-            raw_mamba_out = raw_mamba_out / _rmo_norm.clamp(min=float(self.config.d_model) ** 0.5)
             raw_mamba_out_trace.append(raw_mamba_out.detach().cpu())
 
             # P_soft reconstruction: add the prediction back (the Mamba output represents the

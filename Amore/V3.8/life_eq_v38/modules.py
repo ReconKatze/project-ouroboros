@@ -605,7 +605,11 @@ class ControllerModule(nn.Module):
         # +KL, so minimising L_ctrl drives p → prior.
         # Prior order matches ACTIONS: (CONTINUE, INSPECT_MEMORY, LOAD_STATE, VOLUNTARY_END).
         # Training-only: inference uses argmax on scores, unaffected by this term.
-        log_probs = probs.log()
+        # F.log_softmax instead of probs.log(): when any action dominates for
+        # several steps its rivals' probabilities → 0, giving probs.log() = -inf,
+        # and 0 * (-inf) = NaN that corrupts the backward through L_ctrl.
+        # F.log_softmax(scores) is finite for all finite logits, avoiding that case.
+        log_probs = F.log_softmax(scores, dim=-1)
         log_prior = torch.tensor(
             list(self.config.ctrl_prior), dtype=probs.dtype, device=probs.device
         ).log()

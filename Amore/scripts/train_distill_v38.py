@@ -254,6 +254,30 @@ def clip_state_norms(state: FullState) -> FullState:
     return FullState(**capped)
 
 
+def sanitize_state(state: FullState) -> FullState:
+    """Replace NaN/Inf with 0 in all state tensors so NaN cannot leak between steps.
+
+    clip_state_norms caps large finite values but passes NaN unchanged.  If any
+    module produces NaN in a forward pass (e.g. Mamba kernel, controller entropy),
+    that NaN lands in the returned state and poisons the next step's forward before
+    any norm clamp can help.  sanitize_state is the last line of defense.
+    """
+    clean: dict = {}
+    for k, v in vars(state).items():
+        if isinstance(v, torch.Tensor) and v.is_floating_point():
+            clean[k] = torch.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+        elif k == "Z_ssm" and v is not None:
+            clean[k] = [
+                torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+                if isinstance(t, torch.Tensor) and t.is_floating_point()
+                else t
+                for t in v
+            ]
+        else:
+            clean[k] = v
+    return FullState(**clean)
+
+
 def gradient_norms(model: torch.nn.Module) -> dict[str, float]:
     norms: dict[str, float] = {}
     for name, param in model.named_parameters():
@@ -726,12 +750,47 @@ def main():
             prev_kl = None
             continue
 
-        le_state = clip_state_norms(detach_state(outputs.state))
+        le_state = sanitize_state(clip_state_norms(detach_state(outputs.state)))
         prev_layer_input = outputs.diagnostics.get("layer_input")
         kl = kl_distill_loss(outputs.logits.float(), teacher_last, T=args.temperature)
         prev_kl = kl.detach()
         total_loss = kl + outputs.losses["L_total"]
         if not torch.isfinite(total_loss):
+            # --- NaN/Inf diagnostics: identify the guilty component ---
+            print(f"  [NaN diag] teacher_last finite={torch.isfinite(teacher_last).all().item()}"
+                  f"  max={teacher_last.abs().max().item():.3g}")
+            print(f"  [NaN diag] logits finite={torch.isfinite(outputs.logits).all().item()}"
+                  f"  max={outputs.logits.abs().max().item():.3g}")
+            print(f"  [NaN diag] kl={kl.item():.6f}  finite={torch.isfinite(kl).item()}")
+            for lk, lv in outputs.losses.items():
+                try:
+                    print(f"  [NaN diag] {lk}={lv.item():.6f}  finite={torch.isfinite(lv).item()}")
+                except Exception:
+                    print(f"  [NaN diag] {lk}=<error>")
+            # Check which state tensors contain NaN/Inf
+            for sk, sv in vars(outputs.state).items():
+                if isinstance(sv, torch.Tensor):
+                    if not sv.isfinite().all():
+                        print(f"  [NaN diag] state.{sk} has NaN/Inf  max={sv.abs().max().item():.3g}")
+                elif sk == "Z_ssm" and sv is not None:
+                    for li, t in enumerate(sv):
+                        if isinstance(t, torch.Tensor) and not t.isfinite().all():
+                            print(f"  [NaN diag] state.Z_ssm[{li}] has NaN/Inf  max={t.abs().max().item():.3g}")
+            # Check pre_state too — if NaN is already in the input state it came from a prior step
+            for sk, sv in vars(pre_state).items():
+                if isinstance(sv, torch.Tensor):
+                    if not sv.isfinite().all():
+                        print(f"  [NaN diag] pre_state.{sk} has NaN/Inf  max={sv.abs().max().item():.3g}")
+                elif sk == "Z_ssm" and sv is not None:
+                    for li, t in enumerate(sv):
+                        if isinstance(t, torch.Tensor) and not t.isfinite().all():
+                            print(f"  [NaN diag] pre_state.Z_ssm[{li}] has NaN/Inf  max={t.abs().max().item():.3g}")
+            # Check diagnostics dict for intermediate NaN
+            for dk, dv in outputs.diagnostics.items():
+                if isinstance(dv, torch.Tensor) and dv.is_floating_point():
+                    if not dv.isfinite().all():
+                        print(f"  [NaN diag] diagnostics.{dk} has NaN/Inf  max={dv.abs().max().item():.3g}")
+            # -----------------------------------------------------------
             manifest = {
                 "event_type": "nonfinite_failure",
                 "trigger_name": "nonfinite_loss",

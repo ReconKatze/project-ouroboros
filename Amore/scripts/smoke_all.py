@@ -545,31 +545,28 @@ def test_integration_with_sdm(teacher, device, amp_dtype):
 # ──────────────────────────────────────────────────────────────────────────── #
 
 TRAINING_CMD = textwrap.dedent("""\
-    python scripts/train_distill_v3.py \\
-        --variant phase4_infrastructure \\
-        --teacher Qwen/Qwen2.5-Coder-7B \\
-        --tokenizer Qwen/Qwen2.5-Coder-1.5B \\
+    python scripts/train_distill_v38.py \\
+        --variant v38_flagship \\
+        --teacher Qwen/Qwen3.5-27B \\
+        --tokenizer Qwen/Qwen3.5-27B \\
+        --teacher-cpu \\
         --steps 10000 \\
         --d-state 128 \\
-        --batch-size 4 \\
-        --grad-accum 2 \\
+        --batch-size 1 \\
+        --grad-accum 4 \\
         --lr 5e-5 \\
         --warmup-steps 200 \\
         --seq-len 1024 \\
         --eval-every 500 \\
         --n-val 100 \\
-        --ab-eval-every 1000 \\
-        --ab-rollout-steps 20 \\
-        --reload-test-every 2000 \\
-        --maturity-window 100000 \\
         --checkpoint-every 1000 \\
-        --out checkpoints/step4_le_v3.pt \\
-        --best-out checkpoints/step4_le_v3_best.pt \\
-        --telemetry-dir telemetry/step4 \\
-        --forensic-dir forensics/step4
+        --out checkpoints/step4_v38.pt \\
+        --best-out checkpoints/step4_v38_best.pt \\
+        --telemetry-dir telemetry/step4_v38 \\
+        --forensic-dir forensics/step4_v38
 
     # To resume from a checkpoint, append:
-    #   --resume checkpoints/step4_le_v3.pt
+    #   --resume checkpoints/step4_v38.pt
 """)
 
 
@@ -584,12 +581,20 @@ def parse_args():
         help="Skip GPU integration tests (no teacher model required)",
     )
     p.add_argument(
-        "--teacher", default="Qwen/Qwen2.5-Coder-7B",
+        "--teacher", default="Qwen/Qwen3.5-27B",
         help="HuggingFace ID of the teacher model",
     )
     p.add_argument(
-        "--tokenizer-id", default="Qwen/Qwen2.5-Coder-1.5B",
+        "--tokenizer-id", default="Qwen/Qwen3.5-27B",
         help="HuggingFace ID of the tokenizer",
+    )
+    p.add_argument(
+        "--teacher-cpu", action="store_true", default=True,
+        help="CPU-offload teacher via accelerate (required for 27B+ models)",
+    )
+    p.add_argument(
+        "--no-teacher-cpu", dest="teacher_cpu", action="store_false",
+        help="Load teacher directly to GPU (only safe for small models)",
     )
     return p.parse_args()
 
@@ -633,10 +638,15 @@ def main():
         device    = torch.device("cuda")
         amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
-        print(f"  Loading teacher: {args.teacher}")
+        print(f"  Loading teacher: {args.teacher} ({'CPU-offloaded' if args.teacher_cpu else 'GPU'})")
         teacher = AutoModelForCausalLM.from_pretrained(
             args.teacher, torch_dtype=amp_dtype
-        ).to(device)
+        )
+        if args.teacher_cpu:
+            from accelerate import cpu_offload as _accel_cpu_offload
+            _accel_cpu_offload(teacher, execution_device=device, offload_buffers=True)
+        else:
+            teacher = teacher.to(device)
         teacher.eval()
         for p in teacher.parameters():
             p.requires_grad_(False)

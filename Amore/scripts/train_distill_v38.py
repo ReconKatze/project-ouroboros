@@ -390,8 +390,8 @@ def save_checkpoint(path: str | Path, payload: dict) -> str:
 def parse_args():
     p = argparse.ArgumentParser(description="V3.8 distillation with full telemetry")
     p.add_argument("--variant", default="round3_full")
-    p.add_argument("--teacher", default="Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled")
-    p.add_argument("--tokenizer", default="Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled")
+    p.add_argument("--teacher", default="Qwen/Qwen3.5-27B")
+    p.add_argument("--tokenizer", default="Qwen/Qwen3.5-27B")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--lr", type=float, default=5e-5)
     p.add_argument("--seq-len", type=int, default=1024)

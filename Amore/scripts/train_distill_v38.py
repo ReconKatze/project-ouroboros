@@ -676,6 +676,12 @@ def main():
         with torch.no_grad():
             _t_ids = input_ids if teacher_device == device else input_ids.to(teacher_device)
             teacher_last = teacher(input_ids=_t_ids, use_cache=False).logits[:, -1, :].float().to(device)
+        # CPU-offloaded 27B teachers occasionally produce NaN logits on specific batches
+        # (bfloat16 accumulation in accelerate hooks).  Skip rather than train on bad signal.
+        if not torch.isfinite(teacher_last).all():
+            n_bad = int((~torch.isfinite(teacher_last)).sum())
+            print(f"step={step} | teacher NaN/Inf logits ({n_bad} elements) — skipping step")
+            continue
 
         autocast_ctx = (
             torch.amp.autocast("cuda", dtype=amp_dtype)

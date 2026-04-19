@@ -461,6 +461,16 @@ class LifeEquationModel(nn.Module):
             )  # [B, seq_len, d_model]
             _cap = self.mamba_layers[mamba_idx]._last_final_states
             new_ssm_states.append(_cap if isinstance(_cap, torch.Tensor) else None)
+            # Stop-gradient output guard: caps per-position norm at 10×sqrt(d_model) without
+            # attenuating gradients. The scale tensor is detached so autograd sees
+            # grad = upstream_grad * const_scale — no 1/‖x‖ Jacobian term.
+            # Threshold ≈ 716 for d_model=5120; normal outputs (‖x‖ ≈ 71.6 at init)
+            # pass through unchanged. Only clips values that are 10× the natural scale,
+            # which otherwise cause downstream NaN at step 3+ via SSM transient blow-up.
+            with torch.no_grad():
+                _rmo_n = raw_mamba_out.norm(dim=-1, keepdim=True)
+                _rmo_scale = (10.0 * float(self.config.d_model) ** 0.5 / _rmo_n.clamp(min=1e-6)).clamp(max=1.0)
+            raw_mamba_out = raw_mamba_out * _rmo_scale
             raw_mamba_out_trace.append(raw_mamba_out.detach().cpu())
 
             # P_soft reconstruction: add the prediction back (the Mamba output represents the

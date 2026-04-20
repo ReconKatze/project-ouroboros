@@ -552,18 +552,15 @@ def main():
             )
 
     if args.teacher_cpu:
-        # Weights live in CPU RAM; accelerate's cpu_offload moves each layer to GPU
-        # just-in-time for computation then back to CPU. Only ~1.5 GB of teacher
-        # weights occupy VRAM at any moment instead of ~22 GB. CUDA-only ops
-        # (causal_conv1d etc.) still run on GPU so no kernel errors.
-        # Requires ~54 GB system RAM for a 27B bfloat16 model.
-        from accelerate import cpu_offload as _accel_cpu_offload
+        # device_map="auto" places layers on GPU up to free VRAM then spills to CPU.
+        # On A100 80 GB with student (~3 GB) already loaded, the full 27B bf16 teacher
+        # (~54 GB) fits on GPU so device_map ends up being all-GPU — identical to the
+        # non-offload path but without the hook-based cpu_offload that breaks Qwen3.x.
         teacher = AutoModelForCausalLM.from_pretrained(
-            args.teacher, dtype=torch.bfloat16
+            args.teacher, dtype=torch.bfloat16, device_map="auto"
         )
-        _accel_cpu_offload(teacher, execution_device=device, offload_buffers=True)
-        teacher_device = device  # inputs stay on GPU; hooks handle weight transfers
-        print(f"Teacher: {args.teacher} (bfloat16, CPU-offloaded via accelerate — ~1.5 GB GPU peak per layer)")
+        teacher_device = next(iter(teacher.parameters())).device
+        print(f"Teacher: {args.teacher} (bfloat16, device_map=auto, first layer on {teacher_device})")
     elif args.teacher_4bit:
         if not _BNB_AVAILABLE:
             raise bitsandbytes_requirement_error("--teacher-4bit")

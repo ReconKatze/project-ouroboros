@@ -652,15 +652,15 @@ def main():
         device    = torch.device("cuda")
         amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
-        print(f"  Loading teacher: {args.teacher} ({'CPU-offloaded' if args.teacher_cpu else 'GPU'})")
-        teacher = AutoModelForCausalLM.from_pretrained(
-            args.teacher, torch_dtype=amp_dtype
-        )
+        print(f"  Loading teacher: {args.teacher} ({'device_map=auto' if args.teacher_cpu else 'GPU'})")
         if args.teacher_cpu:
-            from accelerate import cpu_offload as _accel_cpu_offload
-            _accel_cpu_offload(teacher, execution_device=device, offload_buffers=True)
+            teacher = AutoModelForCausalLM.from_pretrained(
+                args.teacher, dtype=amp_dtype, device_map="auto"
+            )
         else:
-            teacher = teacher.to(device)
+            teacher = AutoModelForCausalLM.from_pretrained(
+                args.teacher, dtype=amp_dtype
+            ).to(device)
         teacher.eval()
         for p in teacher.parameters():
             p.requires_grad_(False)

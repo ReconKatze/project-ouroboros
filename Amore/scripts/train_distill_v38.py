@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.join(ROOT, "V3.8"))
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 _BNB_IMPORT_ERROR: Exception | None = None
 _BNB_IMPORT_LOG = ""
@@ -536,6 +536,21 @@ def main():
         torch.cuda.empty_cache()
         print("  Triton warmup done.")
 
+    # Qwen3.x models use hybrid linear-attention layers that require the FLA kernels.
+    # Without flash-linear-attention, transformers falls back to a torch impl that
+    # produces all-NaN logits.  Check before loading the multi-GB weights.
+    _teacher_cfg = AutoConfig.from_pretrained(args.teacher)
+    if "qwen3" in getattr(_teacher_cfg, "model_type", "").lower():
+        import importlib.util as _ilu
+        if _ilu.find_spec("fla") is None:
+            raise RuntimeError(
+                f"Teacher '{args.teacher}' is a Qwen3 hybrid model that requires the "
+                "flash-linear-attention library.\n"
+                "Install it in this session:\n"
+                "  !pip install flash-linear-attention\n"
+                "or re-run scripts/colab_setup.sh (it is now included)."
+            )
+
     if args.teacher_cpu:
         # Weights live in CPU RAM; accelerate's cpu_offload moves each layer to GPU
         # just-in-time for computation then back to CPU. Only ~1.5 GB of teacher
@@ -578,12 +593,15 @@ def main():
         _hc_len = min(64, args.seq_len)
         _hc_ids = torch.randint(1, 1000, (1, _hc_len), dtype=torch.long).to(teacher_device)
         try:
-            _hc_out = teacher(input_ids=_hc_ids).logits[:, -1, :].float()
+            _hc_out = teacher(input_ids=_hc_ids, use_cache=False).logits[:, -1, :].float()
             if not torch.isfinite(_hc_out).all():
                 raise RuntimeError(
                     f"Teacher produced non-finite logits on dummy input "
-                    f"({int((~torch.isfinite(_hc_out)).sum())} elements NaN/Inf). "
-                    "The model checkpoint may be corrupt or incompatible with this accelerate setup."
+                    f"({int((~torch.isfinite(_hc_out)).sum())} elements NaN/Inf).\n"
+                    "For Qwen3.x teachers this is caused by the torch fallback for linear-attention "
+                    "layers — install the fast kernels:\n"
+                    "  !pip install flash-linear-attention\n"
+                    "then re-run.  For other teachers, the checkpoint may be corrupt."
                 )
             print(f"  Teacher OK — logit range [{_hc_out.min().item():.3g}, {_hc_out.max().item():.3g}]")
         except RuntimeError as _hc_e:

@@ -575,9 +575,10 @@ def main():
     # we catch it now rather than after 30+ wasted steps.
     print("Teacher health check...")
     with torch.no_grad():
-        _hc_ids = torch.zeros(1, min(64, args.seq_len), dtype=torch.long).to(teacher_device)
+        _hc_len = min(64, args.seq_len)
+        _hc_ids = torch.randint(1, 1000, (1, _hc_len), dtype=torch.long).to(teacher_device)
         try:
-            _hc_out = teacher(input_ids=_hc_ids, use_cache=False).logits[:, -1, :].float()
+            _hc_out = teacher(input_ids=_hc_ids).logits[:, -1, :].float()
             if not torch.isfinite(_hc_out).all():
                 raise RuntimeError(
                     f"Teacher produced non-finite logits on dummy input "

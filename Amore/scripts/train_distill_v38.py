@@ -544,7 +544,7 @@ def main():
         # Requires ~54 GB system RAM for a 27B bfloat16 model.
         from accelerate import cpu_offload as _accel_cpu_offload
         teacher = AutoModelForCausalLM.from_pretrained(
-            args.teacher, torch_dtype=torch.bfloat16
+            args.teacher, dtype=torch.bfloat16
         )
         _accel_cpu_offload(teacher, execution_device=device, offload_buffers=True)
         teacher_device = device  # inputs stay on GPU; hooks handle weight transfers

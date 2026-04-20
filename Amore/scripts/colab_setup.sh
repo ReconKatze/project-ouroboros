@@ -28,8 +28,11 @@ echo "[2/6] Build tools (packaging, ninja)..."
 pip install -q packaging ninja
 
 # 3. causal-conv1d FIRST — mamba-ssm depends on it
-echo "[3/6] causal-conv1d..."
+echo "[3/6] causal-conv1d + flash-linear-attention (required for Qwen3.5 hybrid linear-attn layers)..."
 pip install causal-conv1d --no-build-isolation
+# flash-linear-attention: Qwen3.5-27B uses hybrid linear-attention layers; the torch
+# fallback produces NaN. Must install the fast FLA kernels.
+pip install flash-linear-attention
 
 # 4. Real Mamba kernels — install from git source to get Mamba3
 #    PyPI release (2.3.1) does not export Mamba3; git source does.

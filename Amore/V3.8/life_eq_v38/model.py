@@ -563,8 +563,8 @@ class LifeEquationModel(nn.Module):
             state.Z_id = state.Z_cog[:, : self.config.n_id_heads, :]
         coherence = torch.cosine_similarity(
             state.Z_narr,
-            state.Z_auto[:, : self.config.d_narr] + 1e-6,
-            dim=-1,
+            state.Z_auto[:, : self.config.d_narr],
+            dim=-1, eps=1e-6,
         ).unsqueeze(-1)
         # Normalize surprise by sqrt(d_model) so the fixed threshold (1.0) is scale-invariant.
         # Un-normalized: norm over d_model ≈ sqrt(d_model) ≈ 39 at random init — always exceeds

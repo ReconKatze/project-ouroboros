@@ -403,6 +403,9 @@ def test_integration_round3(teacher, device, amp_dtype):
             reduction="batchmean",
         ) * 4.0
         total = kl + out.losses.get("L_total", torch.tensor(0.0, device=device))
+        if not total.isfinite():
+            nan_terms = {k: v.item() for k, v in out.losses.items() if not v.isfinite()}
+            assert False, f"NaN/inf in total loss at step {step} — culprits: {nan_terms}"
         total.backward()
         torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
         optimizer.step()
@@ -529,6 +532,9 @@ def test_integration_with_sdm(teacher, device, amp_dtype):
             reduction="batchmean",
         ) * 4.0
         total = kl + out.losses.get("L_total", torch.tensor(0.0, device=device))
+        if not total.isfinite():
+            nan_terms = {k: v.item() for k, v in out.losses.items() if not v.isfinite()}
+            assert False, f"NaN/inf in total loss at step {step} — culprits: {nan_terms}"
         total.backward()
         torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
         optimizer.step()

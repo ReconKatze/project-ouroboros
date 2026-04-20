@@ -395,11 +395,17 @@ def test_integration_round3(teacher, device, amp_dtype):
         assert out.losses is not None, f"losses is None at step {step}"
         assert not torch.isnan(out.logits).any(), f"NaN in logits at step {step}"
 
-        # Backward pass
+        # Backward pass — normalise logits by std before softmax to match
+        # kl_distill_loss() in train_distill_v38.py.  Without this, untrained
+        # random logits have extreme variance and log_softmax produces NaN.
         vocab = min(out.logits.size(-1), teacher_logits.size(-1))
+        s = out.logits[..., :vocab].float()
+        t = teacher_logits[..., :vocab].float()
+        s = s / (s.std(dim=-1, keepdim=True) + 1e-6)
+        t = t / (t.std(dim=-1, keepdim=True) + 1e-6)
         kl = F.kl_div(
-            F.log_softmax(out.logits[..., :vocab].float() / 2.0, dim=-1),
-            F.softmax(teacher_logits[..., :vocab].float() / 2.0, dim=-1),
+            F.log_softmax(s / 2.0, dim=-1),
+            F.softmax(t / 2.0, dim=-1),
             reduction="batchmean",
         ) * 4.0
         total = kl + out.losses.get("L_total", torch.tensor(0.0, device=device))
